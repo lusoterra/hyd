@@ -1,4 +1,4 @@
-.TH HYDD 8 "November 2026" "hydd 0.1.0" "System Administration"
+.TH HYDD 8 "2026-11-21" "hydd 0.1.0" "System Administration"
 .SH NAME
 hydd \- read-only Hydrus Public Tag Repository mirror daemon
 .SH SYNOPSIS
@@ -111,8 +111,8 @@ uses a plain SQLite database at
 Switching backends requires a fresh data directory.
 .TP
 .B partitions
-Custom-store partition count; must be a power of two. More partitions use less RAM
-during the initial build but make more passes over the update files.
+Custom-store partition count; must be a power of two. More partitions use less
+RAM during the initial build but make more passes over the update files.
 .TP
 .B compaction_enabled ", " compact_after_delta_mb
 Whether and when to merge the delta journal into the base store. Compaction

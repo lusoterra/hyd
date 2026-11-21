@@ -1,4 +1,4 @@
-.TH HYDD.CONF 5 "November 2026" "hydd 0.1.0" "File Formats"
+.TH HYDD.CONF 5 "2026-11-21" "hydd 0.1.0" "File Formats"
 .SH NAME
 hydd.conf \- configuration for the hydd Hydrus PTR mirror daemon
 .SH DESCRIPTION
@@ -65,9 +65,9 @@ Number of immutable store partitions. Must be a power of two between 1 and
 .TP
 .B compaction_enabled
 Merge the append-only delta journal into the base store when it grows past
-.B compact_after_delta_mb
-. Default true. Compaction never deletes live tags or mappings; disabling it
-keeps the raw delta journal intact and increases startup memory over time.
+\fIcompact_after_delta_mb\fR. Default true. Compaction never deletes live tags
+or mappings; disabling it keeps the raw delta journal intact and increases
+startup memory over time.
 .TP
 .B compact_after_delta_mb
 Delta size that triggers automatic compaction. Zero disables the threshold.
