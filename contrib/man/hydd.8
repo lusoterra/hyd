@@ -47,7 +47,11 @@ Print the storage and display tags for a 64-character SHA-256 hash, then exit.
 .TP
 .B \-\-compact
 Merge the append-only delta journal into the immutable base store, then exit.
-This never discards live tags or mappings.
+With
+.B compression = false
+it runs SQLite VACUUM and enables incremental auto-vacuum, which is required
+before a later migration to the custom store. This never discards live tags or
+mappings.
 .TP
 .B \-\-verify\-store
 Open and validate the store, print its counts, and exit.
