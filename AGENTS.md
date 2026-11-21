@@ -1,0 +1,54 @@
+# AGENTS.md
+
+Instructions for agents working in this repository.
+
+## Hard limits
+
+- **Test data budget: 10 GiB.** Any test against the real Hydrus PTR (or any
+  other remote repository) must not download or process more than 10 GiB in
+  total. Use `max_download_bytes = 10737418240` and a small
+  `max_update_index` in the test config. Do not run a full sync "just to see if
+  it works" on a development machine.
+- Do not delete anything outside the repository without asking the user first.
+- `packaging/PKGBUILD-git/` is intentionally gitignored. The user will move it
+  into its own repository; do not commit it.
+
+## Build
+
+```sh
+cmake -S . -B /tmp/opencode/build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake --build /tmp/opencode/build -j $(( $(nproc) / 2 ))
+ctest --test-dir /tmp/opencode/build --output-on-failure
+```
+
+Write build logs to `/tmp/opencode/build.log` when running long builds so the
+user can `tail -f` them.
+
+Dependencies: `cmake`, `ninja`, `gcc`, `libcurl`, `openssl`, `zlib`,
+`nlohmann-json`, `simdjson`.
+
+## Integration tests
+
+`tests/fake_repository.py` is a self-contained fake Hydrus repository. It
+serves the same zlib-compressed serialisable JSON as the real server and needs
+no network access. See `tests/integration.sh`.
+
+## Rules of thumb
+
+- The store is immutable base files plus an append-only delta journal. Any new
+  sync path must remain crash-safe and idempotent: reapplying a delta must not
+  change query results.
+- Do not store the full 32-byte sha256 twice. The hash index is the query
+  index; mappings are keyed by hash id.
+- The API must stay read-only. Never implement an endpoint that mutates the
+  repository or the local store in response to a request.
+- Keep the default config at `/etc/hydd.conf`, the default data directory at
+  `/var/lib/hyd`, and the daemon running as an unprivileged user.
+- Compaction is enabled by default. It must never discard live tags or
+  mappings; users can disable it with `compaction_enabled = false`.
+- `compression = true` selects the custom columnar store, `false` selects the
+  plain SQLite mirror. Both must keep the same API behaviour and the same
+  crash-safety guarantees. Switching backends on an existing data directory is
+  refused on purpose.
+- Do not add PostgreSQL support yet; it is explicitly deferred.
+- The project is AGPL-3.0-or-later. Keep new files compatible with that.
