@@ -15,15 +15,13 @@
 - Resumable initial and incremental PTR sync.
 - Compact custom store with an append-only delta journal and compaction.
 - Plain SQLite storage mode for a simpler, inspectable full database.
-- Resumable, streaming SQLite-to-custom migration that reclaims SQLite space as it goes.
 - Tag siblings and parents applied to `display_tags`.
 - Hydrus-compatible access keys, session keys, error codes, and JSON shapes.
 - Rotating log file with gzip retention.
-- systemd unit, sysusers/tmpfiles, man pages, and bash/zsh/fish completions.
 
 ## Build
 
-Arch dependencies:
+Arch Linux dependencies:
 
 ```sh
 sudo pacman -S --needed cmake ninja gcc curl openssl zlib sqlite nlohmann-json simdjson
@@ -47,7 +45,7 @@ The commented default file is [`contrib/hydd.conf`](contrib/hydd.conf). The main
 | `listen_address` / `listen_port` | `127.0.0.1` / `45869` | API listener |
 | `access_key` / `access_key_file` | generated | API access key |
 | `repository_url` | `https://ptr.hydrus.network:45871` | Upstream PTR |
-| `compression` | `true` | `true` = custom store, `false` = SQLite |
+| `compression` | `true` | `true` = hyd's custom store, `false` = SQLite |
 | `partitions` | `16` | Custom-store partitions, power of two |
 | `compaction_enabled` | `true` | Merge the custom store's delta journal |
 | `compact_after_delta_mb` | `512` | Automatic compaction threshold |
@@ -62,7 +60,7 @@ The commented default file is [`contrib/hydd.conf`](contrib/hydd.conf). The main
 
 `compression = true` uses a packed columnar store (roughly 25-30 GB for a full mirror). `compression = false` uses a plain SQLite database at `<data_dir>/sqlite/hyd.sqlite3` (roughly 45-60 GB). Both run the same sync engine and answer the same API calls.
 
-Changing `compression` from `false` to `true` starts a one-time migration. It runs before the API starts, streams data out of SQLite, deletes already-migrated rows, reclaims SQLite pages, and is resumable after a crash. The reverse change, or starting with `compression = false` after a compressed store exists, fails with a loud error; use a new `data_dir` instead.
+Changing `compression` after a store exists is refused. Use a new `data_dir` if you want the other backend.
 
 ### Logging
 
@@ -109,11 +107,10 @@ curl -s -X POST \
 - Hydrus uses SQLite, but a Hydrus client database is split across several files with a client-specific schema. The SQLite backend here is a simpler mirror schema, not a byte-compatible Hydrus client database. PostgreSQL is not implemented.
 - At the time of writing the PTR has about 3.9 billion mappings, 206 million file hashes, and 55 million tags. A full sync downloads roughly 7-8 GB of update files; keep extra free space for temporary files.
 - The first custom-store build is CPU and I/O heavy because it replays every update file once for definitions and once per partition for mappings. Incremental syncs are small.
-- The SQLite mirror is created with incremental auto-vacuum so migration can reclaim pages while streaming.
 
 ## Testing
 
-`ctest` runs unit tests plus fake-repository end-to-end tests for the custom store, SQLite mode, migration, tag deletes, siblings/parents, the API, and compaction. No network is required. Real-PTR tests must stay under 10 GiB; see [AGENTS.md](AGENTS.md).
+`ctest` runs unit tests plus fake-repository end-to-end tests for the custom store, SQLite mode, tag deletes, siblings/parents, the API, and compaction. No network is required. Real-PTR tests must stay under 10 GiB; see [AGENTS.md](AGENTS.md).
 
 ## License
 
