@@ -48,7 +48,7 @@ There is no official "download the database as one file" endpoint. A mirror has 
 - **hydd custom store:** much smaller than a Python client database because it keeps no update history, no SQLite indices, no file metadata, and no media. A full mirror is expected to land in the **25-30 GB** range. A real partial build of update indices 0-20 produced 9,307 hashes and 16,205 mappings in 588 KiB, which scales to roughly 27 GB at the current PTR counts.
 - **hydd SQLite store (`compression = false`):** a plain schema with the same data is expected to be **45-60 GB**, because SQLite B-trees and the hash index cost more per row than the packed custom format.
 
-`hydd` also needs transient disk space for the downloaded update stream during the first build. Plan for roughly **35-40 GB free** for a custom-store first sync (55-70 GB for SQLite), then the update cache is deleted (unless `keep_update_cache = true`).
+`hydd` also needs transient disk space for the downloaded update stream during the first build. Plan for roughly **40-45 GB free** for a custom-store first sync (55-70 GB for SQLite), including temporary definition files, then the update cache is deleted (unless `keep_update_cache = true`).
 
 ## Storage modes
 
@@ -159,7 +159,7 @@ The full commented default file is [`contrib/hydd.conf`](contrib/hydd.conf). Key
 | `sync_on_start` | `true` | Sync immediately at startup |
 | `sync_interval_seconds` | `3600` | Metadata check interval |
 | `compression` | `true` | `true` = custom columnar store, `false` = plain SQLite |
-| `partitions` | `16` | Custom-store partitions (power of two) |
+| `partitions` | `16` | Custom-store partitions (power of two; ignored by SQLite) |
 | `compaction_enabled` | `true` | Merge delta journal into base |
 | `compact_after_delta_mb` | `512` | Compaction threshold |
 | `keep_update_cache` | `false` | Keep downloaded update files |

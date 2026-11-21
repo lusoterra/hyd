@@ -455,6 +455,8 @@ int main(int argc, char** argv)
     {
         if (!runtime.config.get_bool("compression", true))
         {
+            runtime.store.reset();
+            runtime.handlers->set_store(nullptr);
             if (!hyd::sqlite_vacuum(runtime.config, error))
             {
                 HYD_LOGF(error, "SQLite vacuum failed: %s", error.c_str());

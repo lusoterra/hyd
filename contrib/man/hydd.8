@@ -180,7 +180,8 @@ user.
 A full PTR mirror is large: the October 2026 QuickSync archive was 50.6 GB
 compressed and 160 GB extracted. hydd's compact read-only store is much
 smaller (roughly 25-30 GB), but a full initial sync needs room for the
-downloaded update stream (several GB) in addition to the final store.
+downloaded update stream and temporary definition files (several GB) in
+addition to the final store; plan for about 40-45 GB free.
 With
 .B compression = false
 the SQLite mirror is roughly 45-60 GB. Both modes need transient space for the
