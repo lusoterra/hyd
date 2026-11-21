@@ -49,9 +49,7 @@ Print the storage and display tags for a 64-character SHA-256 hash, then exit.
 Merge the append-only delta journal into the immutable base store, then exit.
 With
 .B compression = false
-it runs SQLite VACUUM and enables incremental auto-vacuum, which is required
-before a later migration to the custom store. This never discards live tags or
-mappings.
+it runs SQLite VACUUM. This never discards live tags or mappings.
 .TP
 .B \-\-verify\-store
 Open and validate the store, print its counts, and exit.
@@ -196,10 +194,8 @@ downloaded update stream and temporary definition files (several GB) in
 addition to the final store; plan for about 40-45 GB free.
 With
 .B compression = false
-the SQLite mirror is roughly 45-60 GB. Turning compression on with an existing
-SQLite store runs a resumable, streaming migration before the API starts; it
-reclaims SQLite pages as it proceeds. Turning compression off after a custom
-store exists is refused.
+the SQLite mirror is roughly 45-60 GB. Changing compression after a store
+exists is refused; use a fresh data directory.
 .SH SEE ALSO
 .BR systemctl (1),
 .BR hydd.conf (5),

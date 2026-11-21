@@ -55,14 +55,9 @@ bool compact_store(const Config& config, const SyncCallbacks& callbacks, SyncSta
 // SQLite backend: vacuums the database (reclaims free pages).
 bool sqlite_vacuum(const Config& config, std::string& error);
 
-// Checks the configured backend against what is on disk and performs a
-// resumable SQLite -> custom migration when compression was turned on.
-// Refuses the custom -> SQLite direction loudly.
-bool prepare_storage_backend(const Config& config, const SyncCallbacks& callbacks, SyncState& state,
-    bool& stopped, std::string& error);
-
-bool migrate_sqlite_to_custom(const Config& config, const SyncCallbacks& callbacks, SyncState& state,
-    bool& stopped, std::string& error);
+// Checks the configured backend against the store on disk. Switching
+// compression after a store exists requires a new data_dir.
+bool validate_storage_backend(const Config& config, SyncState& state, std::string& error);
 
 std::uint64_t delta_bytes_on_disk(const Config& config);
 

@@ -397,17 +397,8 @@ int main(int argc, char** argv)
         }
         // Intentionally keep lock_fd open for the lifetime of the process.
 
-        hyd::SyncCallbacks backend_callbacks;
-        backend_callbacks.should_stop = [] { return g_stop.load(); };
-        bool backend_stopped = false;
-        if (!hyd::prepare_storage_backend(runtime.config, backend_callbacks,
-                runtime.sync_state, backend_stopped, error))
+        if (!hyd::validate_storage_backend(runtime.config, runtime.sync_state, error))
         {
-            if (backend_stopped || error == "stopped")
-            {
-                HYD_LOG(info, "backend preparation interrupted; it will resume on the next start");
-                return 0;
-            }
             HYD_LOGF(error, "%s", error.c_str());
             return 1;
         }

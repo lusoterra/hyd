@@ -25,17 +25,8 @@ full mirror.
 uses a plain SQLite database at
 .IR <data_dir>/sqlite/hyd.sqlite3 ,
 roughly 45-60 GB and easier to inspect.
-Changing
-.I false
-to
-.I true
-runs a resumable streaming migration before the API starts and reclaims SQLite
-space as it goes.
-.I true
-to
-.I false
-is refused; use a fresh data directory. This is a mirror schema, not the
-multi-file Hydrus client schema.
+Changing the value after a store exists is refused; use a fresh data
+directory. This is a mirror schema, not the multi-file Hydrus client schema.
 .TP
 .B listen_address ", " listen_port
 API bind address and port. Defaults

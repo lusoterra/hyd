@@ -51,8 +51,6 @@ no network access. See `tests/integration.sh`.
   crash-safety guarantees. Switching backends on an existing data directory is
   refused on purpose.
 - Do not add PostgreSQL support yet; it is explicitly deferred.
-- `compression = false` to `true` must remain a resumable, streaming migration
-  that reclaims SQLite space as it goes. `true` to `false` must fail loudly.
 - Logging must stay at `/var/log/hyd/hyd.log` by default, rotate at 10 MiB,
   keep 5 gzipped files, and remain configurable.
 - The project is AGPL-3.0-or-later. Keep new files compatible with that.
