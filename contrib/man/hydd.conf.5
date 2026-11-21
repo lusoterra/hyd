@@ -1,0 +1,95 @@
+.TH HYDD.CONF 5 "November 2026" "hydd 0.1.0" "File Formats"
+.SH NAME
+hydd.conf \- configuration for the hydd Hydrus PTR mirror daemon
+.SH DESCRIPTION
+.B hydd.conf
+is a plain-text
+.I key = value
+file. Blank lines and lines starting with
+.B #
+or
+.B ;
+are ignored. Values may optionally be quoted with single or double quotes.
+.SH SETTINGS
+.TP
+.B data_dir
+Directory for the store, delta journal, state, and generated keys. Default
+.IR /var/lib/hyd .
+.TP
+.B compression
+Select the storage backend.
+.I true
+(the default) uses the compact custom columnar store, roughly 25-30 GB for a
+full mirror.
+.I false
+uses a plain SQLite database at
+.IR <data_dir>/sqlite/hyd.sqlite3 ,
+roughly 45-60 GB and easier to inspect. Switching backends requires a fresh
+data directory. This is a mirror schema, not the multi-file Hydrus client
+schema.
+.TP
+.B listen_address ", " listen_port
+API bind address and port. Defaults
+.I 127.0.0.1
+and
+.IR 45869 .
+.TP
+.B access_key ", " access_key_file
+API access key. If left empty, the key is read from
+.I access_key_file
+or generated there on first start.
+.TP
+.B service_key ", " service_key_file
+Service key reported by the API. Generated if empty.
+.TP
+.B service_name
+Human-readable tag service name. Default
+.IR "public tag repository" .
+.TP
+.B repository_url ", " repository_access_key
+Upstream Hydrus repository. The defaults are the real PTR and its shared
+read-only key.
+.TP
+.B sync_enabled
+Enable or disable all repository syncing. Default true.
+.TP
+.B sync_on_start
+Sync immediately at startup instead of waiting one interval. Default true.
+.TP
+.B sync_interval_seconds
+Seconds between metadata checks. Minimum 60. Default 3600.
+.TP
+.B partitions
+Number of immutable store partitions. Must be a power of two between 1 and
+64. Default 16.
+.TP
+.B compaction_enabled
+Merge the append-only delta journal into the base store when it grows past
+.B compact_after_delta_mb
+. Default true. Compaction never deletes live tags or mappings; disabling it
+keeps the raw delta journal intact and increases startup memory over time.
+.TP
+.B compact_after_delta_mb
+Delta size that triggers automatic compaction. Zero disables the threshold.
+Default 512.
+.TP
+.B keep_update_cache
+Keep downloaded update files after a successful initial build. Default false.
+.TP
+.B download_timeout_seconds
+Per-request timeout. Default 120.
+.TP
+.B download_rate_limit_kib
+Optional download rate limit in KiB/s. Zero means unlimited.
+.TP
+.B log_level
+One of trace, debug, info, warn, error, off. Default info.
+.TP
+.B max_download_bytes ", " max_update_index
+Test/development limits. A partial store is produced when
+.B max_update_index
+is set. Automated tests against the real PTR must stay under 10 GiB.
+.SH FILES
+.I /etc/hydd.conf
+.SH SEE ALSO
+.BR hydd (8)

@@ -1,0 +1,36 @@
+[Unit]
+Description=hydd - read-only Hydrus Public Tag Repository mirror
+Documentation=man:hydd(8) man:hydd.conf(5)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hyd
+Group=hyd
+ExecStart=/usr/bin/hydd --config /etc/hydd.conf
+Restart=on-failure
+RestartSec=5s
+
+StateDirectory=hyd
+StateDirectoryMode=0750
+UMask=0077
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

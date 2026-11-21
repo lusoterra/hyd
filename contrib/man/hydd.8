@@ -1,0 +1,191 @@
+.TH HYDD 8 "November 2026" "hydd 0.1.0" "System Administration"
+.SH NAME
+hydd \- read-only Hydrus Public Tag Repository mirror daemon
+.SH SYNOPSIS
+.B hydd
+.RI [ options ]
+.SH DESCRIPTION
+.B hydd
+keeps a local, read-only mirror of the Hydrus Public Tag Repository (PTR)
+and answers Hydrus Client API queries about file hashes in the same JSON
+language as the Python Hydrus client.
+.PP
+The PTR is a centralized Hydrus server, not a peer-to-peer network. It stores
+only SHA-256 file hashes and their tag mappings; it does not store the files
+themselves. The default repository is
+.BR https://ptr.hydrus.network:45871 .
+.PP
+On first start
+.B hydd
+downloads the repository update stream, builds a compact immutable store, and
+then periodically applies new updates. It never uploads tags, petitions, or
+account data.
+.SH OPTIONS
+.TP
+.BR \-c ", " \-\-config " " \fIPATH\fR
+Configuration file. Default:
+.IR /etc/hydd.conf .
+.TP
+.BR \-d ", " \-\-data\-dir " " \fIPATH\fR
+Override the configured data directory.
+.TP
+.BR \-l ", " \-\-listen " " \fIADDRESS\fR
+Override the API listen address.
+.TP
+.BR \-p ", " \-\-port " " \fIPORT\fR
+Override the API listen port.
+.TP
+.B \-\-no\-sync
+Serve the existing store without contacting the repository or applying
+updates.
+.TP
+.B \-\-sync\-once
+Run one sync pass, building the store if necessary, then exit.
+.TP
+.BI \-\-query " " HASH
+Print the storage and display tags for a 64-character SHA-256 hash, then exit.
+.TP
+.B \-\-compact
+Merge the append-only delta journal into the immutable base store, then exit.
+This never discards live tags or mappings.
+.TP
+.B \-\-verify\-store
+Open and validate the store, print its counts, and exit.
+.TP
+.B \-\-print\-access\-key
+Print the API access key and exit.
+.TP
+.BI \-\-log\-level " " LEVEL
+One of
+.IR trace ", " debug ", " info ", " warn ", " error ", " off .
+.TP
+.BR \-h ", " \-\-help
+Show a help summary.
+.TP
+.BR \-V ", " \-\-version
+Show the version.
+.SH FILES
+.TP
+.I /etc/hydd.conf
+Default configuration file.
+.TP
+.I /var/lib/hyd
+Default data directory. Contains the store, delta journal, sync state, and
+generated keys.
+.TP
+.I /var/lib/hyd/api_access_key
+Generated API access key (mode 0600).
+.TP
+.I /var/lib/hyd/service_key
+Generated service key reported by the Client API.
+.SH CONFIGURATION
+The configuration is a simple
+.I key = value
+file. The most important settings are:
+.TP
+.B data_dir
+Data directory. Default
+.IR /var/lib/hyd .
+.TP
+.B listen_address ", " listen_port
+API listener. Defaults to
+.I 127.0.0.1:45869
+(loopback only).
+.TP
+.B access_key ", " access_key_file
+API access key, either inline or read/generated from a file.
+.TP
+.B repository_url ", " repository_access_key
+PTR address and the shared read-only key. The defaults point at the real PTR.
+.TP
+.B sync_enabled ", " sync_on_start ", " sync_interval_seconds
+Background sync policy.
+.TP
+.B compression
+Select the storage backend.
+.I true
+(the default) uses the compact custom columnar store.
+.I false
+uses a plain SQLite database at
+.IR <data_dir>/sqlite/hyd.sqlite3 .
+Switching backends requires a fresh data directory.
+.TP
+.B partitions
+Custom-store partition count; must be a power of two. More partitions use less RAM
+during the initial build but make more passes over the update files.
+.TP
+.B compaction_enabled ", " compact_after_delta_mb
+Whether and when to merge the delta journal into the base store. Compaction
+is enabled by default and never drops live data.
+.TP
+.B keep_update_cache
+Keep downloaded update files after the initial build. Default false.
+.TP
+.B max_download_bytes ", " max_update_index
+Development/test limits. Automated tests must stay under 10 GiB of downloads.
+.SH API
+The following read-only Client API endpoints are implemented:
+.PP
+.nf
+GET  /api_version
+GET  /session_key
+GET  /verify_access_key
+GET  /client_info
+GET  /get_services
+GET  /get_service
+GET  /get_files/file_metadata
+GET  /get_files/file_hashes
+GET  /health              (hydd extension)
+.fi
+.PP
+Every endpoint except
+.IR / ", " /api_version ", " /health
+requires the
+.B Hydrus-Client-API-Access-Key
+header, the
+.B Hydrus-Client-API-Session-Key
+header, or the same parameter in the query string or JSON body. Missing keys
+return 401, invalid keys 403, and expired session keys 419.
+.PP
+The server speaks JSON only. CBOR requests return 406. File and thumbnail
+endpoints return 404 because the mirror stores no files. Search and mutation
+endpoints return 501.
+.SH EXAMPLES
+Run one sync and exit:
+.PP
+.nf
+    hydd --sync-once
+.fi
+.PP
+Look up a file:
+.PP
+.nf
+    hydd --query 4c77267f93415de0bc33b7725b8c331a809a924084bee03ab2f5fae1c6019eb2
+.fi
+.PP
+Query the running API:
+.PP
+.nf
+    curl -H "Hydrus-Client-API-Access-Key: $(hydd --print-access-key)" \\
+         'http://127.0.0.1:45869/get_files/file_metadata?hashes=%5B%22...%22%5D'
+.fi
+.SH SECURITY
+The API requires a key and listens on loopback by default. It uses plain HTTP;
+for remote access, place it behind a TLS reverse proxy. Keep
+.I /etc/hydd.conf
+and the generated key files readable only by the
+.I hyd
+user.
+.SH NOTES
+A full PTR mirror is large: the October 2026 QuickSync archive was 50.6 GB
+compressed and 160 GB extracted. hydd's compact read-only store is much
+smaller (roughly 25-30 GB), but a full initial sync needs room for the
+downloaded update stream (several GB) in addition to the final store.
+With
+.B compression = false
+the SQLite mirror is roughly 45-60 GB. Both modes need transient space for the
+update stream.
+.SH SEE ALSO
+.BR systemctl (1),
+.BR hydd.conf (5),
+.IR https://hydrusnetwork.github.io/hydrus/ .
