@@ -77,6 +77,10 @@ Default 512.
 .B keep_update_cache
 Keep downloaded update files after a successful initial build. Default false.
 .TP
+.B download_workers
+Number of parallel update-file downloads. Each worker reuses one TLS
+connection. Default 8; maximum 32.
+.TP
 .B download_timeout_seconds
 Per-request timeout. Default 120.
 .TP

@@ -2,6 +2,7 @@
 
 #include "common/log.hpp"
 #include "common/util.hpp"
+#include "hydrus/downloader.hpp"
 #include "hydrus/repository.hpp"
 #include "hydrus/update.hpp"
 #include "store/builder.hpp"
@@ -116,52 +117,29 @@ bool detect_kind(UpdateParser& parser, std::span<const std::uint8_t> compressed,
 bool download_updates(const Config& config, const std::vector<UpdateSource>& sources,
     const SyncCallbacks& callbacks, SyncState& state, RepositoryClient& repository, std::string& error)
 {
-    const auto limit = config.max_download_bytes();
-    std::uint64_t downloaded_this_run = 0;
-    std::size_t processed = 0;
+    (void)repository;
 
+    std::vector<DownloadItem> items;
+    items.reserve(sources.size());
     for (const auto& source : sources)
     {
-        if (stopped(callbacks))
-        {
-            error = "stopped";
-            return false;
-        }
-
-        if (path_exists(source.cache_path) && file_size_or_zero(source.cache_path) > 0)
-        {
-            continue;
-        }
-
-        Bytes body;
-        if (!repository.fetch_update(source.update.hash, body, error))
-        {
-            return false;
-        }
-
-        if (limit != 0 && state.downloaded_bytes + downloaded_this_run + body.size() > limit)
-        {
-            error = "download limit of " + human_bytes(limit) + " reached; refusing to download more update files";
-            return false;
-        }
-
-        if (!write_file_atomic(source.cache_path, body, error))
-        {
-            return false;
-        }
-
-        downloaded_this_run += body.size();
-        state.downloaded_bytes += body.size();
-        ++state.downloaded_files;
-        ++processed;
-
-        if (processed % 100 == 0)
-        {
-            HYD_LOGF(info, "downloaded %zu update files this run (%s)",
-                processed, human_bytes(downloaded_this_run).c_str());
-        }
+        items.push_back(DownloadItem { source.update.hash, source.cache_path });
     }
 
+    const auto summary = download_update_files(config, items, callbacks.should_stop);
+    state.downloaded_bytes += summary.bytes;
+    state.downloaded_files += summary.files;
+
+    if (!summary.error.empty())
+    {
+        error = summary.error;
+        return false;
+    }
+    if (summary.stopped)
+    {
+        error = "stopped";
+        return false;
+    }
     return true;
 }
 

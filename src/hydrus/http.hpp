@@ -2,6 +2,8 @@
 
 #include "common/util.hpp"
 
+#include <curl/curl.h>
+
 #include <atomic>
 #include <cstdint>
 #include <string>
@@ -39,6 +41,7 @@ private:
 
     std::string base_url_;
     std::string access_key_;
+    CURL* handle_ = nullptr;
     std::string user_agent_;
     long timeout_seconds_ = 120;
     std::uint64_t rate_limit_kib_ = 0;

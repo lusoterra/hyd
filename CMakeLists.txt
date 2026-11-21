@@ -24,6 +24,7 @@ add_library(hydcore STATIC
     src/common/util.cpp
     src/common/config.cpp
     src/hydrus/http.cpp
+    src/hydrus/downloader.cpp
     src/hydrus/repository.cpp
     src/hydrus/update.cpp
     src/store/store.cpp

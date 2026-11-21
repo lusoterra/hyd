@@ -6,6 +6,7 @@
 
 #include <chrono>
 #include <cstring>
+#include <mutex>
 #include <thread>
 
 namespace hyd {
@@ -13,6 +14,7 @@ namespace hyd {
 namespace {
 
 std::atomic<bool> g_curl_initialized { false };
+std::once_flag g_curl_init_once;
 
 std::size_t write_callback(char* data, std::size_t size, std::size_t count, void* userdata)
 {
@@ -33,10 +35,8 @@ bool is_retryable_status(long status)
 
 void HttpClient::global_init()
 {
-    if (!g_curl_initialized.exchange(true))
-    {
-        curl_global_init(CURL_GLOBAL_DEFAULT);
-    }
+    g_curl_initialized.store(true);
+    std::call_once(g_curl_init_once, [] { curl_global_init(CURL_GLOBAL_DEFAULT); });
 }
 
 void HttpClient::global_cleanup()
@@ -59,16 +59,33 @@ HttpClient::HttpClient(std::string base_url, std::string access_key, std::string
     global_init();
 }
 
-HttpClient::~HttpClient() = default;
+HttpClient::~HttpClient()
+{
+    if (handle_ != nullptr)
+    {
+        curl_easy_cleanup(handle_);
+        handle_ = nullptr;
+    }
+}
 
 bool HttpClient::perform(const std::string& url, HttpResponse& response, std::string& error)
 {
-    CURL* handle = curl_easy_init();
-    if (handle == nullptr)
+    if (handle_ == nullptr)
+    {
+        handle_ = curl_easy_init();
+    }
+
+    if (handle_ == nullptr)
     {
         error = "curl_easy_init failed";
         return false;
     }
+
+    // Keep the same easy handle so libcurl can reuse the TLS connection. This
+    // is the difference between one connection per update file and one per
+    // worker for the whole sync.
+    curl_easy_reset(handle_);
+    CURL* handle = handle_;
 
     response.body.clear();
     response.status = 0;
@@ -116,7 +133,6 @@ bool HttpClient::perform(const std::string& url, HttpResponse& response, std::st
     }
 
     curl_slist_free_all(headers);
-    curl_easy_cleanup(handle);
 
     return result == CURLE_OK;
 }

@@ -50,6 +50,7 @@ The commented default file is [`contrib/hydd.conf`](contrib/hydd.conf). The main
 | `compaction_enabled` | `true` | Merge the custom store's delta journal |
 | `compact_after_delta_mb` | `512` | Automatic compaction threshold |
 | `sync_interval_seconds` | `3600` | Metadata check interval |
+| `download_workers` | `8` | Parallel update downloads (1-32) |
 | `log_file` | `/var/log/hyd/hyd.log` | Set empty for stderr only |
 | `log_rotate_mb` | `10` | Rotate when the plaintext log reaches this size |
 | `log_rotate_keep` | `5` | Number of compressed old logs to keep |

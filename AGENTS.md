@@ -53,4 +53,6 @@ no network access. See `tests/integration.sh`.
 - Do not add PostgreSQL support yet; it is explicitly deferred.
 - Logging must stay at `/var/log/hyd/hyd.log` by default, rotate at 10 MiB,
   keep 5 gzipped files, and remain configurable.
+- Update downloads must reuse TLS connections and stay parallel by default.
+  Opening a new connection per update file is a performance bug.
 - The project is AGPL-3.0-or-later. Keep new files compatible with that.
