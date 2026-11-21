@@ -304,6 +304,24 @@ void ApiServer::handle_connection(int socket_fd)
 
     HYD_LOGF(debug, "API request %s %s", parsed.method.c_str(), parsed.path.c_str());
 
+    if (parsed.method == "OPTIONS")
+    {
+        const std::string response =
+            "HTTP/1.1 200 OK\r\n"
+            "Server: hydd/0.1\r\n"
+            "Hydrus-Server: hydd/0.1\r\n"
+            "Access-Control-Allow-Origin: *\r\n"
+            "Access-Control-Allow-Headers: *\r\n"
+            "Access-Control-Allow-Methods: GET, POST\r\n"
+            "Content-Length: 0\r\n"
+            "Connection: close\r\n"
+            "\r\n";
+        send_all(socket_fd, response.data(), response.size());
+        ::shutdown(socket_fd, SHUT_RDWR);
+        ::close(socket_fd);
+        return;
+    }
+
     std::size_t content_length = 0;
     if (const auto iterator = parsed.headers.find("content-length"); iterator != parsed.headers.end())
     {
@@ -348,6 +366,10 @@ void ApiServer::handle_connection(int socket_fd)
     std::string head;
     head += "HTTP/1.1 " + std::to_string(response.status) + " " + status_text(response.status) + "\r\n";
     head += "Server: hydd/0.1\r\n";
+    head += "Hydrus-Server: hydd/0.1\r\n";
+    head += "Access-Control-Allow-Origin: *\r\n";
+    head += "Access-Control-Allow-Headers: *\r\n";
+    head += "Access-Control-Allow-Methods: GET, POST\r\n";
     head += "Content-Type: " + response.content_type + "\r\n";
     head += "Content-Length: " + std::to_string(response.body.size()) + "\r\n";
     head += "Connection: close\r\n";

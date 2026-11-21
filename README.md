@@ -242,7 +242,7 @@ curl -s -X POST \
 What matches:
 
 - Endpoint names, JSON field names, SHA-256 parameters, and 401/403/419 error codes.
-- `Hydrus-Client-API-Access-Key`, session keys, and query/body parameter forms.
+- `Hydrus-Client-API-Access-Key`, session keys, query/body parameter forms, and CORS headers including `OPTIONS` preflight.
 - Unknown hashes returned with `"file_id": null` instead of being omitted.
 - Per-service `storage_tags` and `display_tags` objects, with PTR siblings and parents expanded for the display view.
 - `version`/`hydrus_version` in JSON responses, legacy arrays in `/get_services`, and the `all known tags` pseudo-service.
