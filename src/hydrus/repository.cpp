@@ -71,7 +71,7 @@ void RepositoryMetadata::merge(const RepositoryMetadata& other)
 }
 
 RepositoryClient::RepositoryClient(std::string base_url, std::string access_key)
-    : http_(std::move(base_url), std::move(access_key), "hydd/0.1")
+    : http_(std::move(base_url), std::move(access_key), "hydd/0.2")
 {
 }
 

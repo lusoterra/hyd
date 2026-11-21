@@ -383,7 +383,7 @@ ApiResponse ApiHandlers::route(const ApiRequest& request)
     if (path == "/api_version")
     {
         auto body = base_response();
-        body["hyd_version"] = "0.1.0";
+        body["hyd_version"] = "0.2.0";
         return ApiResponse { 200, "application/json", dump_json(body) };
     }
 

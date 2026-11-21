@@ -10,8 +10,8 @@ Instructions for agents working in this repository.
   `max_update_index` in the test config. Do not run a full sync "just to see if
   it works" on a development machine.
 - Do not delete anything outside the repository without asking the user first.
-- `packaging/PKGBUILD-git/` is intentionally gitignored. The user will move it
-  into its own repository; do not commit it.
+- Arch packaging lives outside this repository at `../_PKGBUILD/hyd-git`,
+  which is its own git repository. Do not add it back to this tree.
 
 ## Build
 
@@ -51,4 +51,8 @@ no network access. See `tests/integration.sh`.
   crash-safety guarantees. Switching backends on an existing data directory is
   refused on purpose.
 - Do not add PostgreSQL support yet; it is explicitly deferred.
+- `compression = false` to `true` must remain a resumable, streaming migration
+  that reclaims SQLite space as it goes. `true` to `false` must fail loudly.
+- Logging must stay at `/var/log/hyd/hyd.log` by default, rotate at 10 MiB,
+  keep 5 gzipped files, and remain configurable.
 - The project is AGPL-3.0-or-later. Keep new files compatible with that.

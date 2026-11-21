@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(hyd VERSION 0.1.0 LANGUAGES CXX)
+project(hyd VERSION 0.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -86,4 +86,8 @@ if (BASH_PROGRAM)
     add_test(NAME integration_sqlite
         COMMAND ${BASH_PROGRAM} ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration_sqlite.sh $<TARGET_FILE:hydd>)
     set_tests_properties(integration_sqlite PROPERTIES TIMEOUT 120)
+
+    add_test(NAME integration_migration
+        COMMAND ${BASH_PROGRAM} ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration_migration.sh $<TARGET_FILE:hydd>)
+    set_tests_properties(integration_migration PROPERTIES TIMEOUT 180)
 endif()

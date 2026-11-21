@@ -1,4 +1,4 @@
-.TH HYDD.CONF 5 "2026-11-21" "hydd 0.1.0" "File Formats"
+.TH HYDD.CONF 5 "2026-11-21" "hydd 0.2.0" "File Formats"
 .SH NAME
 hydd.conf \- configuration for the hydd Hydrus PTR mirror daemon
 .SH DESCRIPTION
@@ -24,9 +24,18 @@ full mirror.
 .I false
 uses a plain SQLite database at
 .IR <data_dir>/sqlite/hyd.sqlite3 ,
-roughly 45-60 GB and easier to inspect. Switching backends requires a fresh
-data directory. This is a mirror schema, not the multi-file Hydrus client
-schema.
+roughly 45-60 GB and easier to inspect.
+Changing
+.I false
+to
+.I true
+runs a resumable streaming migration before the API starts and reclaims SQLite
+space as it goes.
+.I true
+to
+.I false
+is refused; use a fresh data directory. This is a mirror schema, not the
+multi-file Hydrus client schema.
 .TP
 .B listen_address ", " listen_port
 API bind address and port. Defaults
@@ -81,6 +90,19 @@ Per-request timeout. Default 120.
 .TP
 .B download_rate_limit_kib
 Optional download rate limit in KiB/s. Zero means unlimited.
+.TP
+.B log_file
+Rotating log file. Empty disables file logging. Default
+.IR /var/log/hyd/hyd.log .
+.TP
+.B log_rotate_mb
+Rotate the plaintext log at this size. Default 10.
+.TP
+.B log_rotate_keep
+Number of old compressed logs to retain. Default 5.
+.TP
+.B log_rotate_compress
+Gzip old logs. Default true.
 .TP
 .B log_level
 One of trace, debug, info, warn, error, off. Default info.

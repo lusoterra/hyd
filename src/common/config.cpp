@@ -160,7 +160,7 @@ bool Config::finalize(std::string& error)
         return false;
     }
 
-    if (get_string("repository_url").empty())
+    if (repository_url().empty())
     {
         error = "repository_url must not be empty";
         return false;
@@ -247,6 +247,7 @@ void Config::dump_effective() const
     HYD_LOGF(info, "partitions: %d", partitions());
     HYD_LOGF(info, "keep_update_cache: %s", get_bool("keep_update_cache", false) ? "true" : "false");
     HYD_LOGF(info, "log_level: %s", get_string("log_level", "info").c_str());
+    HYD_LOGF(info, "log_file: %s", get_string("log_file", "(stderr only)").c_str());
     HYD_LOGF(info, "repository_access_key: %s", repository_access_key().empty() ? "(none)" : "(set)");
 }
 

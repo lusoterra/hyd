@@ -28,7 +28,7 @@
 
 namespace {
 
-constexpr const char* kVersion = "0.1.0";
+constexpr const char* kVersion = "0.2.0";
 
 std::atomic<bool> g_stop { false };
 
@@ -312,6 +312,22 @@ int main(int argc, char** argv)
 
     hyd::log_set_level(hyd::log_level_from_string(runtime.config.get_string("log_level", "info")));
 
+    const auto log_file = runtime.config.get_string("log_file");
+    if (!log_file.empty())
+    {
+        const auto rotate_mb = runtime.config.get_int("log_rotate_mb", 10);
+        std::string log_error;
+        if (!hyd::log_init_file(
+                log_file,
+                rotate_mb > 0 ? static_cast<std::uint64_t>(rotate_mb) * 1024 * 1024 : 0,
+                static_cast<int>(runtime.config.get_int("log_rotate_keep", 5)),
+                runtime.config.get_bool("log_rotate_compress", true),
+                log_error))
+        {
+            HYD_LOGF(warn, "%s", log_error.c_str());
+        }
+    }
+
     if (!hyd::mkdir_p(runtime.config.data_dir(), error)
         || !hyd::mkdir_p(runtime.config.state_dir(), error))
     {
@@ -360,6 +376,41 @@ int main(int argc, char** argv)
     {
         HYD_LOGF(error, "%s", error.c_str());
         return 1;
+    }
+
+    const bool inspection_only = options->query || options->verify_store;
+
+    if (!inspection_only)
+    {
+        const auto lock_path = runtime.config.data_dir() / "hyd.lock";
+        const int lock_fd = ::open(lock_path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0644);
+        if (lock_fd < 0)
+        {
+            HYD_LOGF(error, "cannot open lock file %s: %s", lock_path.string().c_str(),
+                hyd::errno_string(errno).c_str());
+            return 1;
+        }
+        if (::flock(lock_fd, LOCK_EX | LOCK_NB) != 0)
+        {
+            HYD_LOGF(error, "another hydd process is using %s", runtime.config.data_dir().string().c_str());
+            return 1;
+        }
+        // Intentionally keep lock_fd open for the lifetime of the process.
+
+        hyd::SyncCallbacks backend_callbacks;
+        backend_callbacks.should_stop = [] { return g_stop.load(); };
+        bool backend_stopped = false;
+        if (!hyd::prepare_storage_backend(runtime.config, backend_callbacks,
+                runtime.sync_state, backend_stopped, error))
+        {
+            if (backend_stopped || error == "stopped")
+            {
+                HYD_LOG(info, "backend preparation interrupted; it will resume on the next start");
+                return 0;
+            }
+            HYD_LOGF(error, "%s", error.c_str());
+            return 1;
+        }
     }
 
     if (runtime.sync_state.built)
@@ -430,23 +481,6 @@ int main(int argc, char** argv)
                   << runtime.store->stored_mapping_count() << " mappings, "
                   << runtime.store->stored_tag_count() << " tags)\n";
         return 0;
-    }
-
-    {
-        const auto lock_path = runtime.config.data_dir() / "hyd.lock";
-        const int lock_fd = ::open(lock_path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0644);
-        if (lock_fd < 0)
-        {
-            HYD_LOGF(error, "cannot open lock file %s: %s", lock_path.string().c_str(),
-                hyd::errno_string(errno).c_str());
-            return 1;
-        }
-        if (::flock(lock_fd, LOCK_EX | LOCK_NB) != 0)
-        {
-            HYD_LOGF(error, "another hydd process is using %s", runtime.config.data_dir().string().c_str());
-            return 1;
-        }
-        // Intentionally keep lock_fd open for the lifetime of the process.
     }
 
     runtime.config.dump_effective();
@@ -585,6 +619,7 @@ int main(int argc, char** argv)
 
     hyd::HttpClient::global_cleanup();
     HYD_LOG(info, "hydd stopped");
+    hyd::log_close_file();
     hyd::log_shutdown();
     return 0;
 }

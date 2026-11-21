@@ -214,6 +214,7 @@ public:
         sqlite3_busy_timeout(db_, 10000);
 
         const char* pragmas[] = {
+            "PRAGMA auto_vacuum=INCREMENTAL",
             "PRAGMA journal_mode=WAL",
             "PRAGMA synchronous=NORMAL",
             "PRAGMA cache_size=-524288",
@@ -796,7 +797,8 @@ bool sqlite_vacuum(const Config& config, std::string& error)
         return false;
     }
 
-    const bool checkpointed = sqlite_exec(db, "PRAGMA wal_checkpoint(TRUNCATE)", error);
+    const bool configured = sqlite_exec(db, "PRAGMA auto_vacuum=INCREMENTAL", error);
+    const bool checkpointed = configured && sqlite_exec(db, "PRAGMA wal_checkpoint(TRUNCATE)", error);
     const bool vacuumed = checkpointed && sqlite_exec(db, "VACUUM", error);
     sqlite3_close(db);
 
@@ -805,7 +807,7 @@ bool sqlite_vacuum(const Config& config, std::string& error)
         return false;
     }
 
-    HYD_LOG(info, "SQLite store vacuumed");
+    HYD_LOG(info, "SQLite store vacuumed with incremental auto-vacuum enabled");
     return true;
 }
 

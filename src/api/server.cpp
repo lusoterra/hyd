@@ -308,8 +308,8 @@ void ApiServer::handle_connection(int socket_fd)
     {
         const std::string response =
             "HTTP/1.1 200 OK\r\n"
-            "Server: hydd/0.1\r\n"
-            "Hydrus-Server: hydd/0.1\r\n"
+            "Server: hydd/0.2\r\n"
+            "Hydrus-Server: hydd/0.2\r\n"
             "Access-Control-Allow-Origin: *\r\n"
             "Access-Control-Allow-Headers: *\r\n"
             "Access-Control-Allow-Methods: GET, POST\r\n"
@@ -365,8 +365,8 @@ void ApiServer::handle_connection(int socket_fd)
 
     std::string head;
     head += "HTTP/1.1 " + std::to_string(response.status) + " " + status_text(response.status) + "\r\n";
-    head += "Server: hydd/0.1\r\n";
-    head += "Hydrus-Server: hydd/0.1\r\n";
+    head += "Server: hydd/0.2\r\n";
+    head += "Hydrus-Server: hydd/0.2\r\n";
     head += "Access-Control-Allow-Origin: *\r\n";
     head += "Access-Control-Allow-Headers: *\r\n";
     head += "Access-Control-Allow-Methods: GET, POST\r\n";

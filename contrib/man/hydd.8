@@ -1,4 +1,4 @@
-.TH HYDD 8 "2026-11-21" "hydd 0.1.0" "System Administration"
+.TH HYDD 8 "2026-11-21" "hydd 0.2.0" "System Administration"
 .SH NAME
 hydd \- read-only Hydrus Public Tag Repository mirror daemon
 .SH SYNOPSIS
@@ -78,6 +78,10 @@ Generated API access key (mode 0600).
 .TP
 .I /var/lib/hyd/service_key
 Generated service key reported by the Client API.
+.TP
+.I /var/log/hyd/hyd.log
+Rotating plaintext log. Old logs are gzipped as
+.IR hyd.log.1.gz " ... " hyd.log.5.gz .
 .SH CONFIGURATION
 The configuration is a simple
 .I key = value
@@ -120,6 +124,10 @@ is enabled by default and never drops live data.
 .TP
 .B keep_update_cache
 Keep downloaded update files after the initial build. Default false.
+.TP
+.B log_file ", " log_rotate_mb ", " log_rotate_keep ", " log_rotate_compress
+Rotating gzip log. Defaults:
+.IR /var/log/hyd/hyd.log ", 10 MiB, 5 files, enabled."
 .TP
 .B max_download_bytes ", " max_update_index
 Development/test limits. Automated tests must stay under 10 GiB of downloads.
@@ -184,8 +192,10 @@ downloaded update stream and temporary definition files (several GB) in
 addition to the final store; plan for about 40-45 GB free.
 With
 .B compression = false
-the SQLite mirror is roughly 45-60 GB. Both modes need transient space for the
-update stream.
+the SQLite mirror is roughly 45-60 GB. Turning compression on with an existing
+SQLite store runs a resumable, streaming migration before the API starts; it
+reclaims SQLite pages as it proceeds. Turning compression off after a custom
+store exists is refused.
 .SH SEE ALSO
 .BR systemctl (1),
 .BR hydd.conf (5),
