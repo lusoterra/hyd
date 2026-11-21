@@ -513,6 +513,8 @@ int main(int argc, char** argv)
     sigaction(SIGINT, &action, nullptr);
     sigaction(SIGTERM, &action, nullptr);
     signal(SIGPIPE, SIG_IGN);
+    // Configuration is intentionally reloaded by restarting the service.
+    signal(SIGHUP, SIG_IGN);
 
     hyd::HttpClient::global_init();
 
