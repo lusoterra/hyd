@@ -175,7 +175,7 @@ The store has two layers:
 
 Compaction folds delta records into the base and deletes the journal. It **never discards live tags or mappings**; query results are identical before and after. It keeps startup memory flat and reclaims journal space.
 
-Compaction is **on by default**. Users who want to keep the raw incremental journal can set:
+Compaction is **on by default**. It applies only to the custom store. If you want the full, straightforward database instead of the packed one, use `compression = false`. If you want the packed store but want to keep the raw incremental journal, set:
 
 ```ini
 compaction_enabled = false
@@ -207,7 +207,7 @@ The daemon implements a read-only subset of the Hydrus Client API. Every JSON re
 | `GET/POST /get_files/file_hashes` | SHA-256 to SHA-256 only |
 | `GET /health` | hydd extension: build/sync status |
 
-`get_files/file_metadata` supports `hash`/`hashes`, `only_return_identifiers`, `only_return_basic_information`, `include_services_object`, `include_notes`, and `detailed_url_information`. Unknown hashes are returned as `{"file_id": null, "hash": "..."}`, exactly like the Python client.
+`get_files/file_metadata` supports `hash`/`hashes`, `only_return_identifiers`, `only_return_basic_information`, `include_services_object`, `include_notes`, and `detailed_url_information`. Unknown hashes are returned as `{"file_id": null, "hash": "..."}`, exactly like the Python client. `create_new_file_ids` is accepted but ignored because the mirror is read-only.
 
 ### Deliberately not implemented
 

@@ -360,6 +360,13 @@ ApiResponse ApiHandlers::route(const ApiRequest& request)
         return text_response(406, "hydd speaks JSON only; CBOR is not implemented.");
     }
 
+    if (const auto content_type = request.headers.find("content-type");
+        content_type != request.headers.end()
+        && to_lower(content_type->second).find("application/cbor") != std::string::npos)
+    {
+        return text_response(406, "hydd speaks JSON only; CBOR is not implemented.");
+    }
+
     if (const auto accept = request.headers.find("accept"); accept != request.headers.end()
         && to_lower(accept->second).find("application/cbor") != std::string::npos)
     {
