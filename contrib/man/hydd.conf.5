@@ -69,11 +69,12 @@ Sync immediately at startup instead of waiting one interval. Default true.
 Seconds between metadata checks. Minimum 60. Default 3600.
 .TP
 .B partitions
-Number of immutable store partitions. Must be a power of two between 1 and
-64. Default 16.
+Number of custom-store partitions. Must be a power of two between 1 and 64.
+Default 16.
 .TP
 .B compaction_enabled
-Merge the append-only delta journal into the base store when it grows past
+For the custom store, merge the append-only delta journal into the base store
+when it grows past
 \fIcompact_after_delta_mb\fR. Default true. Compaction never deletes live tags
 or mappings; disabling it keeps the raw delta journal intact and increases
 startup memory over time.
