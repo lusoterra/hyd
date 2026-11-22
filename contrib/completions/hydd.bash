@@ -28,7 +28,7 @@ _hydd()
     esac
 
     opts="-c --config -d --data-dir -l --listen -p --port --no-sync --sync-once \
-          --query --api-query --compact --verify-store --scan-updates --stats --print-access-key --log-level -h --help -V --version"
+          --query --api-query --compact --verify-store --scan-updates --repair-cache --stats --print-access-key --log-level -h --help -V --version"
 
     COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
     return 0

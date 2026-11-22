@@ -12,6 +12,7 @@ _arguments -s -S \
     '--compact[merge pending deltas into the base store and exit]' \
     '--verify-store[open and validate the store and exit]' \
     '--scan-updates[parse every cached update file and report format errors]' \
+    '--repair-cache[re-download missing or corrupt cached update files and exit]' \
     '--stats[query the running local API and print repository statistics]' \
     '--print-access-key[print the API access key and exit]' \
     '--log-level[log verbosity]:level:(trace debug info warn error off)' \

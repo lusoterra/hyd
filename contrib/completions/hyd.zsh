@@ -6,6 +6,7 @@ _hyd()
     commands=(
         'stats:show daemon, repository and build statistics'
         'scan:parse every cached update file and report problems'
+        'repair:re-download missing or corrupt cached update files'
         'verify:open and validate the local store'
         'version:print the hyd version'
         'help:show usage'

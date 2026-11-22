@@ -4,6 +4,7 @@ complete -c hyd -f
 
 complete -c hyd -n "not __fish_seen_subcommand_from $hyd_commands" -a stats -d 'Show repository statistics'
 complete -c hyd -n "not __fish_seen_subcommand_from $hyd_commands" -a scan -d 'Scan cached update files'
+complete -c hyd -n "not __fish_seen_subcommand_from $hyd_commands" -a repair -d 'Re-download missing or corrupt cached update files'
 complete -c hyd -n "not __fish_seen_subcommand_from $hyd_commands" -a verify -d 'Open and validate the store'
 complete -c hyd -n "not __fish_seen_subcommand_from $hyd_commands" -a version -d 'Print the hyd version'
 complete -c hyd -n "not __fish_seen_subcommand_from $hyd_commands" -a help -d 'Show usage'
