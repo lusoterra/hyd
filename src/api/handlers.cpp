@@ -218,6 +218,43 @@ void ApiHandlers::set_sync_state(const SyncState& state)
     sync_state_ = state;
 }
 
+void ApiHandlers::request_cache_repair(const Hash& hash)
+{
+    std::lock_guard<std::mutex> lock(repair_mutex_);
+    if (repair_hashes_.size() >= 1024)
+    {
+        repair_full_ = true;
+        return;
+    }
+    repair_hashes_.push_back(hash);
+}
+
+void ApiHandlers::request_cache_repair_full()
+{
+    std::lock_guard<std::mutex> lock(repair_mutex_);
+    repair_full_ = true;
+}
+
+std::vector<Hash> ApiHandlers::take_cache_repair_hashes()
+{
+    std::lock_guard<std::mutex> lock(repair_mutex_);
+    std::vector<Hash> hashes;
+    hashes.swap(repair_hashes_);
+    return hashes;
+}
+
+bool ApiHandlers::cache_repair_full_requested() const
+{
+    std::lock_guard<std::mutex> lock(repair_mutex_);
+    return repair_full_;
+}
+
+void ApiHandlers::clear_cache_repair_full()
+{
+    std::lock_guard<std::mutex> lock(repair_mutex_);
+    repair_full_ = false;
+}
+
 nlohmann::json ApiHandlers::base_response() const
 {
     nlohmann::json root;
@@ -1045,6 +1082,7 @@ ApiResponse ApiHandlers::handle_repository_metadata(const ApiRequest& request)
 
     if (!update_cache_healthy(metadata, error))
     {
+        request_cache_repair_full();
         return text_response(503, error);
     }
 
@@ -1155,6 +1193,7 @@ ApiResponse ApiHandlers::handle_repository_update(const ApiRequest& request)
             path.string().c_str());
         std::error_code remove_ec;
         std::filesystem::remove(path, remove_ec);
+        request_cache_repair(*hash);
         return text_response(500, "cached update file is corrupt and was removed");
     }
 

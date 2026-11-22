@@ -60,6 +60,7 @@ struct Options
     bool api_query = false;
     bool verify_store = false;
     bool scan_updates = false;
+    bool repair_cache = false;
     bool stats = false;
     bool compact = false;
     bool print_access_key = false;
@@ -84,6 +85,7 @@ void print_help()
         "      --api-query HASH       Query the running API for a file hash and exit\n"
         "      --verify-store         Open and validate the store and exit\n"
         "      --scan-updates         Parse every cached update file and report format errors\n"
+        "      --repair-cache         Re-download missing or corrupt cached update files and exit\n"
         "      --stats                Query the running local API and print repository statistics\n"
         "      --compact              Merge pending deltas into the base store and exit\n"
         "      --print-access-key     Print every configured API access key and exit\n"
@@ -114,6 +116,7 @@ std::optional<Options> parse_options(int argc, char** argv, std::string& error)
         { "log-level", required_argument, nullptr, 1005 },
         { "scan-updates", no_argument, nullptr, 1007 },
         { "stats", no_argument, nullptr, 1008 },
+        { "repair-cache", no_argument, nullptr, 1010 },
         { "help", no_argument, nullptr, 'h' },
         { "version", no_argument, nullptr, 'V' },
         { nullptr, 0, nullptr, 0 },
@@ -181,6 +184,9 @@ std::optional<Options> parse_options(int argc, char** argv, std::string& error)
                 break;
             case 1008:
                 options.stats = true;
+                break;
+            case 1010:
+                options.repair_cache = true;
                 break;
             case 'h':
                 print_help();
@@ -719,6 +725,28 @@ int main(int argc, char** argv)
 
     runtime.config.dump_effective();
 
+    if (options->repair_cache)
+    {
+        hyd::HttpClient::global_init();
+        hyd::SyncCallbacks callbacks;
+        callbacks.should_stop = [] { return g_stop.load(); };
+
+        hyd::CacheRepairResult result;
+        const bool ok = hyd::repair_update_cache(runtime.config, callbacks, result, error);
+        hyd::HttpClient::global_cleanup();
+
+        if (!ok)
+        {
+            HYD_LOGF(error, "update cache repair failed: %s", error.c_str());
+            return 1;
+        }
+
+        std::cout << "update cache checked " << result.checked << " files: "
+                  << result.missing << " missing, " << result.corrupt << " corrupt, "
+                  << result.repaired << " repaired\n";
+        return 0;
+    }
+
     if (options->compact)
     {
         hyd::SyncCallbacks callbacks;
@@ -790,6 +818,61 @@ int main(int argc, char** argv)
     if (sync_enabled)
     {
         sync_thread = std::thread([&runtime] {
+            const bool repair_enabled = runtime.config.get_bool("repair_enabled", true);
+            const bool cache_enabled = runtime.config.get_bool("keep_update_cache", false);
+            std::int64_t next_full_repair_at = 0;
+
+            auto run_repairs = [&] {
+                if (!repair_enabled || !cache_enabled)
+                {
+                    // Drop queued requests rather than letting them accumulate.
+                    runtime.handlers->take_cache_repair_hashes();
+                    runtime.handlers->clear_cache_repair_full();
+                    return;
+                }
+
+                hyd::SyncCallbacks repair_callbacks;
+                repair_callbacks.should_stop = [] { return g_stop.load(); };
+
+                auto hashes = runtime.handlers->take_cache_repair_hashes();
+                if (!hashes.empty())
+                {
+                    hyd::CacheRepairResult result;
+                    std::string repair_error;
+                    if (!hyd::repair_update_files(
+                            runtime.config, hashes, repair_callbacks, result, repair_error))
+                    {
+                        if (repair_error != "stopped")
+                        {
+                            HYD_LOGF(warn, "targeted update-cache repair failed: %s",
+                                repair_error.c_str());
+                        }
+                    }
+                }
+
+                if (runtime.handlers->cache_repair_full_requested()
+                    && hyd::now_unix() >= next_full_repair_at)
+                {
+                    runtime.handlers->clear_cache_repair_full();
+                    // Do not rescan a multi-GB cache more than once per ten
+                    // minutes, even if clients keep requesting broken files.
+                    next_full_repair_at = hyd::now_unix() + 600;
+
+                    hyd::CacheRepairResult result;
+                    std::string repair_error;
+                    HYD_LOG(info, "checking the update cache after a relay health failure");
+                    if (!hyd::repair_update_cache(
+                            runtime.config, repair_callbacks, result, repair_error))
+                    {
+                        if (repair_error != "stopped")
+                        {
+                            HYD_LOGF(warn, "update-cache repair failed: %s",
+                                repair_error.c_str());
+                        }
+                    }
+                }
+            };
+
             const bool sync_on_start = runtime.config.get_bool("sync_on_start", true);
             runtime.handlers->set_next_check_at(0);
             if (sync_on_start || !runtime.sync_state.built)
@@ -802,6 +885,7 @@ int main(int argc, char** argv)
                     HYD_LOGF(error, "sync failed: %s", sync_error.c_str());
                 }
             }
+            run_repairs();
 
             while (!g_stop.load())
             {
@@ -810,6 +894,7 @@ int main(int argc, char** argv)
                 runtime.handlers->set_next_check_at(hyd::now_unix() + interval.count());
                 while (!g_stop.load() && std::chrono::steady_clock::now() < deadline)
                 {
+                    run_repairs();
                     std::this_thread::sleep_for(std::chrono::milliseconds(500));
                 }
                 if (g_stop.load())
@@ -825,6 +910,7 @@ int main(int argc, char** argv)
                 {
                     HYD_LOGF(error, "sync failed: %s", sync_error.c_str());
                 }
+                run_repairs();
             }
         });
     }

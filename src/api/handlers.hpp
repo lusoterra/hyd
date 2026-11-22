@@ -31,6 +31,15 @@ public:
     void set_next_check_at(std::int64_t timestamp) { next_check_at_.store(timestamp); }
     void set_build_progress(std::shared_ptr<BuildProgress> progress) { build_progress_ = std::move(progress); }
 
+    // Update-cache repair queue. /update enqueues a hash whose cached file no
+    // longer matches its name; /metadata asks for a full verification when the
+    // cache is incomplete. The sync thread consumes these requests.
+    void request_cache_repair(const Hash& hash);
+    void request_cache_repair_full();
+    std::vector<Hash> take_cache_repair_hashes();
+    bool cache_repair_full_requested() const;
+    void clear_cache_repair_full();
+
     const std::vector<std::string>& access_keys() const { return access_keys_; }
     const std::string& service_key() const { return service_key_; }
 
@@ -72,6 +81,10 @@ private:
     SyncState sync_state_;
     std::atomic<bool> partial_ { false };
     std::atomic<std::int64_t> next_check_at_ { 0 };
+
+    mutable std::mutex repair_mutex_;
+    std::vector<Hash> repair_hashes_;
+    bool repair_full_ = false;
 
     mutable std::mutex sessions_mutex_;
     std::unordered_map<std::string, std::int64_t> sessions_; // key -> expiry unix

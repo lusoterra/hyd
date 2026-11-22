@@ -109,6 +109,21 @@ def build_repository(mode):
             parents=[(0, [(23, 22)])],
         )))
 
+    if mode == "published":
+        # The same four indices as "incremental", plus two freshly published
+        # ones. Used to prove that a resumed initial build finishes its old
+        # snapshot before catching up on new indices.
+        legacy_two = hashlib.sha1(b"legacy-two").hexdigest()
+        repo.add_index(pack(definitions([(12, h3), (14, legacy_two)], [(23, "character:delta")])))
+        repo.add_index(pack(content(
+            mapping_add=[(23, [12]), (22, [12]), (22, [14])],
+            mapping_delete=[(20, [11])],
+            parents=[(0, [(23, 22)])],
+        )))
+        h4 = sha("epsilon-file")
+        repo.add_index(pack(definitions([(15, h4)], [(24, "series:epsilon")])))
+        repo.add_index(pack(content(mapping_add=[(24, [15])])))
+
     if mode == "future":
         # index 2: a content type this build does not understand. hydd must
         # refuse to sync instead of silently dropping it.
@@ -172,7 +187,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=45871)
-    parser.add_argument("--mode", choices=["initial", "incremental", "future", "badhash", "knownbad"], default="initial")
+    parser.add_argument("--mode", choices=["initial", "incremental", "published", "future", "badhash", "knownbad"], default="initial")
     args = parser.parse_args()
 
     repo, hashes = build_repository(args.mode)

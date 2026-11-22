@@ -49,8 +49,14 @@ no network access. See `tests/integration.sh`.
 - The custom columnar store is the only supported backend. Do not reintroduce
   the removed SQLite mirror without a deliberate migration and format design.
 - The initial build checkpoints after the definitions pass and after each
-  partition. Resume only when the update set, partition count, and store
-  format match; otherwise rebuild from scratch.
+  partition. Resume only when the persisted update snapshot, partition count,
+  and store format match; otherwise rebuild from scratch. Do not fetch newer
+  metadata before finishing a valid checkpoint: apply new indices afterwards
+  as an incremental delta. A PTR publication during a long build must not
+  invalidate the checkpoint.
+- Cache repair may only rewrite files under the update cache. It must never
+  modify the query store, and it must stay bounded (no repair loop on every
+  request).
 - Do not add PostgreSQL support yet; it is explicitly deferred.
 - Logging must stay at `/var/log/hyd/hyd.log` by default, rotate at 10 MiB,
   keep 5 gzipped files, and remain configurable.

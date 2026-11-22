@@ -3,7 +3,7 @@
 #
 #   hyd [--sha256|--sha1|--md5] FILE   hash FILE and query its tags
 #   hyd HASH                           query a SHA-256, SHA-1, or MD5 hash
-#   hyd stats|scan|verify|version
+#   hyd stats|scan|repair|verify|version
 #
 # Set HYD_BIN or HYD_CONFIG to override the defaults.
 
@@ -18,6 +18,7 @@ usage()
 usage: hyd [--sha256|--sha1|--md5] FILE|HASH
        hyd stats
        hyd scan
+       hyd repair
        hyd verify
        hyd version
 
@@ -145,6 +146,15 @@ cmd_verify()
     fi
 }
 
+cmd_repair()
+{
+    require_bin
+    if ! "$HYD_BIN" -c "$HYD_CONFIG" --repair-cache; then
+        printf 'hyd: hint: the update cache may need write access; try sudo -u hyd\n' >&2
+        exit 1
+    fi
+}
+
 cmd_version()
 {
     require_bin
@@ -169,6 +179,10 @@ case "$1" in
         ;;
     scan)
         cmd_scan
+        exit 0
+        ;;
+    repair)
+        cmd_repair
         exit 0
         ;;
     verify)

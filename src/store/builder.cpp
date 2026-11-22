@@ -14,10 +14,12 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <fstream>
 #include <numeric>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -598,6 +600,62 @@ std::string source_fingerprint(const std::vector<UpdateSource>& sources)
     }
 
     return hex_encode(sha256(bytes));
+}
+
+// Returns true when store/build.json describes exactly the update snapshot
+// persisted in state/repository.json. This is checked before fetching newer
+// metadata so a publication that happens during a long build (or while the
+// daemon is stopped) cannot invalidate an otherwise resumable checkpoint.
+bool checkpoint_matches_metadata(const Config& config, const SyncState& state,
+    const RepositoryMetadata& metadata, std::int64_t max_index, BuildCheckpoint& checkpoint)
+{
+    if (state.built || path_exists(config.store_dir() / "manifest.json"))
+    {
+        return false;
+    }
+
+    bool exists = false;
+    std::string checkpoint_error;
+    if (!load_build_checkpoint(config.store_dir() / "build.json", checkpoint, exists, checkpoint_error))
+    {
+        HYD_LOGF(warn, "discarding unreadable initial-build checkpoint: %s",
+            checkpoint_error.c_str());
+        return false;
+    }
+    if (!exists)
+    {
+        return false;
+    }
+
+    if (checkpoint.store_format != kStoreFormatVersion
+        || checkpoint.partitions != static_cast<std::uint64_t>(config.partitions())
+        || checkpoint.completed_partitions > checkpoint.partitions
+        || checkpoint.started_at <= 0
+        || checkpoint.source_count == 0)
+    {
+        return false;
+    }
+
+    const auto cache = cache_paths(config);
+    std::vector<UpdateSource> snapshot;
+    snapshot.reserve(metadata.update_file_count());
+    for (const auto& [index, rows] : metadata.updates)
+    {
+        if (max_index >= 0 && index > max_index)
+        {
+            continue;
+        }
+        for (const auto& update : rows)
+        {
+            UpdateSource source;
+            source.update = update;
+            source.cache_path = update_cache_path(cache, update.hash);
+            snapshot.push_back(std::move(source));
+        }
+    }
+
+    return snapshot.size() == checkpoint.source_count
+        && source_fingerprint(snapshot) == checkpoint.source_fingerprint;
 }
 
 struct BuildStats
@@ -1683,6 +1741,17 @@ bool build_initial_store(const Config& config, const RepositoryMetadata& metadat
 
         HYD_LOGF(info, "checkpoint: partition %zu/%zu complete", p + 1, partitions);
 
+        // Test hook: gives integration tests a deterministic window in which
+        // to kill the daemon between two partitions. No effect when unset.
+        if (const char* pause = std::getenv("HYD_TEST_PAUSE_AFTER_CHECKPOINT_MS"))
+        {
+            const long milliseconds = std::strtol(pause, nullptr, 10);
+            if (milliseconds > 0)
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(milliseconds));
+            }
+        }
+
         std::error_code remove_ec;
         std::filesystem::remove(defs_path, remove_ec);
 
@@ -2174,25 +2243,44 @@ bool sync_repository(const Config& config, const SyncCallbacks& callbacks, bool&
     }
 
     const std::int64_t since = state.next_index;
-    HYD_LOGF(info, "checking repository metadata since index %lld", static_cast<long long>(since));
 
-    RepositoryMetadata fresh;
-    if (!repository.fetch_metadata(since, fresh, error))
+    // A valid checkpoint already selected a consistent set of update files.
+    // Finish that snapshot before asking the repository for newer indices.
+    BuildCheckpoint checkpoint;
+    const bool resume_snapshot = checkpoint_matches_metadata(config, state, metadata, max_index, checkpoint);
+    if (resume_snapshot)
     {
-        if (state.built)
-        {
-            HYD_LOGF(warn, "cannot fetch repository metadata, keeping the current store: %s", error.c_str());
-            error.clear();
-            return true;
-        }
-        return false;
+        HYD_LOGF(info,
+            "initial-build checkpoint is still valid; finishing its update snapshot "
+            "before fetching new indices (%llu/%llu partitions complete)",
+            static_cast<unsigned long long>(checkpoint.completed_partitions),
+            static_cast<unsigned long long>(checkpoint.partitions));
+    }
+    else
+    {
+        HYD_LOGF(info, "checking repository metadata since index %lld", static_cast<long long>(since));
     }
 
-    metadata.merge(fresh);
-    state.next_update_due = metadata.next_update_due;
-    if (!save_repository_metadata_file(metadata_path, metadata, error))
+    RepositoryMetadata fresh;
+    if (!resume_snapshot)
     {
-        return false;
+        if (!repository.fetch_metadata(since, fresh, error))
+        {
+            if (state.built)
+            {
+                HYD_LOGF(warn, "cannot fetch repository metadata, keeping the current store: %s", error.c_str());
+                error.clear();
+                return true;
+            }
+            return false;
+        }
+
+        metadata.merge(fresh);
+        state.next_update_due = metadata.next_update_due;
+        if (!save_repository_metadata_file(metadata_path, metadata, error))
+        {
+            return false;
+        }
     }
 
     std::vector<UpdateSource> all_sources;
@@ -2300,6 +2388,110 @@ bool sync_repository(const Config& config, const SyncCallbacks& callbacks, bool&
     if (highest_target >= 0)
     {
         state.next_index = highest_target + 1;
+    }
+
+    if (resume_snapshot && state.built)
+    {
+        // The checkpoint covered an older, internally consistent snapshot.
+        // Catch up with indices published since then. This is best-effort: the
+        // store is already complete and consistent, and the next regular sync
+        // retries if the repository is unavailable right now.
+        RepositoryMetadata catchup;
+        std::string catchup_error;
+        if (!repository.fetch_metadata(state.next_index, catchup, catchup_error))
+        {
+            HYD_LOGF(warn, "initial build finished from the checkpointed snapshot; "
+                "cannot fetch newer indices yet: %s", catchup_error.c_str());
+        }
+        else
+        {
+            metadata.merge(catchup);
+            state.next_update_due = metadata.next_update_due;
+            if (!save_repository_metadata_file(metadata_path, metadata, catchup_error))
+            {
+                HYD_LOGF(warn, "cannot save repository metadata after the initial build: %s",
+                    catchup_error.c_str());
+            }
+
+            std::vector<UpdateSource> catchup_sources;
+            std::int64_t catchup_target = state.next_index - 1;
+            for (const auto& [index, rows] : metadata.updates)
+            {
+                if (index < state.next_index)
+                {
+                    continue;
+                }
+                if (max_index >= 0 && index > max_index)
+                {
+                    continue;
+                }
+
+                catchup_target = std::max(catchup_target, index);
+                for (const auto& update : rows)
+                {
+                    UpdateSource source;
+                    source.update = update;
+                    source.cache_path = update_cache_path(cache, update.hash);
+                    catchup_sources.push_back(std::move(source));
+                }
+            }
+
+            if (!catchup_sources.empty())
+            {
+                HYD_LOGF(info, "catching up on %zu update files published since the checkpointed snapshot",
+                    catchup_sources.size());
+            }
+
+            bool catchup_ok = true;
+            if (!catchup_sources.empty())
+            {
+                catchup_ok = download_updates(
+                    config, catchup_sources, callbacks, state, repository, catchup_error);
+                if (!catchup_ok && catchup_error == "stopped")
+                {
+                    stopped_flag = true;
+                    error.clear();
+                    return true;
+                }
+
+                if (catchup_ok)
+                {
+                    for (const auto& source : catchup_sources)
+                    {
+                        if (!path_exists(source.cache_path)
+                            || file_size_or_zero(source.cache_path) == 0)
+                        {
+                            catchup_error = "new update file " + hex_encode(source.update.hash)
+                                + " is missing from the cache";
+                            catchup_ok = false;
+                            break;
+                        }
+                    }
+                }
+
+                if (!catchup_ok)
+                {
+                    HYD_LOGF(warn, "cannot apply newer updates yet: %s", catchup_error.c_str());
+                }
+                else if (!apply_incremental(config, catchup_sources, callbacks, state, catchup_error))
+                {
+                    if (catchup_error == "stopped")
+                    {
+                        stopped_flag = true;
+                        error.clear();
+                        return true;
+                    }
+                    HYD_LOGF(warn, "cannot apply newer updates yet: %s", catchup_error.c_str());
+                    catchup_ok = false;
+                }
+            }
+
+            if (catchup_ok && catchup_target >= 0)
+            {
+                highest_target = std::max(highest_target, catchup_target);
+                state.next_index = highest_target + 1;
+            }
+        }
     }
 
     state.partial = (max_index >= 0 && state.next_index > max_index);
@@ -2754,6 +2946,216 @@ bool compact_store(const Config& config, const SyncCallbacks& callbacks, SyncSta
     return true;
 }
 
+
+namespace {
+
+std::filesystem::path cached_update_path(const Config& config, const Hash& hash)
+{
+    return config.cache_dir() / "updates" / (hex_encode(hash) + ".bin");
+}
+
+bool download_repairs(const Config& config, const std::vector<DownloadItem>& items,
+    const SyncCallbacks& callbacks, CacheRepairResult& result, std::string& error)
+{
+    const auto summary = download_update_files(config, items, callbacks.should_stop);
+    if (!summary.error.empty())
+    {
+        error = summary.error;
+        return false;
+    }
+    if (summary.stopped)
+    {
+        error = "stopped";
+        return false;
+    }
+
+    for (const auto& item : items)
+    {
+        if (!path_exists(item.cache_path) || file_size_or_zero(item.cache_path) == 0)
+        {
+            ++result.failed;
+            continue;
+        }
+
+        std::string read_error;
+        auto bytes = read_file(item.cache_path, read_error);
+        if (bytes && sha256(*bytes) == item.hash)
+        {
+            ++result.repaired;
+        }
+        else
+        {
+            ++result.failed;
+        }
+    }
+
+    if (result.failed > 0)
+    {
+        error = std::to_string(result.failed) + " update files could not be repaired";
+        return false;
+    }
+    return true;
+}
+
+} // namespace
+
+bool repair_update_cache(const Config& config, const SyncCallbacks& callbacks,
+    CacheRepairResult& result, std::string& error)
+{
+    result = CacheRepairResult {};
+
+    if (!config.get_bool("keep_update_cache", false))
+    {
+        error = "update cache is disabled; set keep_update_cache = true to repair it";
+        return false;
+    }
+
+    RepositoryMetadata metadata;
+    if (!load_repository_metadata_file(config.state_dir() / "repository.json", metadata, error))
+    {
+        return false;
+    }
+
+    std::vector<DownloadItem> items;
+    std::unordered_set<std::string> seen;
+    for (const auto& [index, rows] : metadata.updates)
+    {
+        (void)index;
+        for (const auto& update : rows)
+        {
+            const std::string key = hex_encode(update.hash);
+            if (!seen.insert(key).second)
+            {
+                continue;
+            }
+
+            ++result.checked;
+            const auto path = cached_update_path(config, update.hash);
+            bool needs_download = false;
+
+            if (!path_exists(path) || file_size_or_zero(path) == 0)
+            {
+                ++result.missing;
+                needs_download = true;
+            }
+            else
+            {
+                std::string read_error;
+                auto bytes = read_file(path, read_error);
+                if (!bytes)
+                {
+                    ++result.corrupt;
+                    needs_download = true;
+                }
+                else if (sha256(*bytes) != update.hash)
+                {
+                    HYD_LOGF(warn, "repair: cached update %s is corrupt", key.c_str());
+                    std::error_code remove_ec;
+                    std::filesystem::remove(path, remove_ec);
+                    ++result.corrupt;
+                    needs_download = true;
+                }
+            }
+
+            if (needs_download)
+            {
+                items.push_back(DownloadItem { update.hash, path });
+            }
+        }
+    }
+
+    if (result.checked == 0)
+    {
+        error = "repository metadata lists no update files";
+        return false;
+    }
+
+    if (items.empty())
+    {
+        HYD_LOGF(info, "update cache verified: %llu files intact",
+            static_cast<unsigned long long>(result.checked));
+        return true;
+    }
+
+    HYD_LOGF(warn, "update cache needs repair: %llu missing, %llu corrupt of %llu files",
+        static_cast<unsigned long long>(result.missing),
+        static_cast<unsigned long long>(result.corrupt),
+        static_cast<unsigned long long>(result.checked));
+
+    if (!download_repairs(config, items, callbacks, result, error))
+    {
+        return false;
+    }
+
+    HYD_LOGF(info, "update cache repaired: %llu files downloaded",
+        static_cast<unsigned long long>(result.repaired));
+    return true;
+}
+
+bool repair_update_files(const Config& config, const std::vector<Hash>& hashes,
+    const SyncCallbacks& callbacks, CacheRepairResult& result, std::string& error)
+{
+    result = CacheRepairResult {};
+
+    if (!config.get_bool("keep_update_cache", false))
+    {
+        error = "update cache is disabled; set keep_update_cache = true to repair it";
+        return false;
+    }
+
+    std::vector<DownloadItem> items;
+    std::unordered_set<std::string> seen;
+    for (const auto& hash : hashes)
+    {
+        const std::string key = hex_encode(hash);
+        if (!seen.insert(key).second)
+        {
+            continue;
+        }
+
+        ++result.checked;
+        const auto path = cached_update_path(config, hash);
+        bool needs_download = false;
+
+        if (!path_exists(path) || file_size_or_zero(path) == 0)
+        {
+            ++result.missing;
+            needs_download = true;
+        }
+        else
+        {
+            std::string read_error;
+            auto bytes = read_file(path, read_error);
+            if (!bytes || sha256(*bytes) != hash)
+            {
+                std::error_code remove_ec;
+                std::filesystem::remove(path, remove_ec);
+                ++result.corrupt;
+                needs_download = true;
+            }
+        }
+
+        if (needs_download)
+        {
+            items.push_back(DownloadItem { hash, path });
+        }
+    }
+
+    if (items.empty())
+    {
+        return true;
+    }
+
+    HYD_LOGF(info, "repairing %zu cached update files", items.size());
+    if (!download_repairs(config, items, callbacks, result, error))
+    {
+        return false;
+    }
+
+    HYD_LOGF(info, "repaired %llu cached update files",
+        static_cast<unsigned long long>(result.repaired));
+    return true;
+}
 
 bool clean_update_cache(const Config& config, std::string& error)
 {

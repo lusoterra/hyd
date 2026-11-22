@@ -293,4 +293,92 @@ if SCAN_OUT=$("${BIN}" -c "${WORK}/hydd.conf" --scan-updates 2>&1); then
 fi
 echo "${SCAN_OUT}" | grep -q 'FAIL '
 
+# Explicit full repair must re-download the corrupt entry.
+"${BIN}" -c "${WORK}/hydd.conf" --repair-cache | grep -q '1 repaired'
+"${BIN}" -c "${WORK}/hydd.conf" --scan-updates | grep -q 'no update format problems found'
+
+# A missing cache entry must be refilled too.
+MISSING_FILE=$(find "${WORK}/data/cache/updates" -name '*.bin' | tail -n 1)
+rm -f "${MISSING_FILE}"
+"${BIN}" -c "${WORK}/hydd.conf" --repair-cache | grep -q '1 missing'
+[ -f "${MISSING_FILE}" ]
+
+# A running daemon must heal a file that /update finds corrupt, without a
+# restart and without rebuilding the store.
+AUTO_PORT=$((PORT_API + 20))
+sed -e "s/^listen_port = .*/listen_port = ${AUTO_PORT}/" \
+    "${WORK}/hydd.conf" > "${WORK}/hydd-autorepair.conf"
+printf 'sync_on_start = false\n' >> "${WORK}/hydd-autorepair.conf"
+"${BIN}" -c "${WORK}/hydd-autorepair.conf" > "${WORK}/autorepair.log" 2>&1 &
+DAEMON_PID=$!
+sleep 0.8
+AUTO_BASE="http://127.0.0.1:${AUTO_PORT}"
+AUTO_FILE=$(find "${WORK}/data/cache/updates" -name '*.bin' | head -n 1)
+AUTO_HASH=$(basename "${AUTO_FILE}" .bin)
+printf 'damaged' > "${AUTO_FILE}"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Key: ${KEY}" \
+    "${AUTO_BASE}/update?update_hash=${AUTO_HASH}")" = "500" ]
+AUTO_CODE=000
+for _ in $(seq 1 40); do
+    AUTO_CODE=$(curl -s -o "${WORK}/autorepaired.bin" -w '%{http_code}' \
+        -H "Hydrus-Key: ${KEY}" \
+        "${AUTO_BASE}/update?update_hash=${AUTO_HASH}")
+    [ "${AUTO_CODE}" = "200" ] && break
+    sleep 0.25
+done
+[ "${AUTO_CODE}" = "200" ]
+[ "$(sha256sum "${WORK}/autorepaired.bin" | awk '{print $1}')" = "${AUTO_HASH}" ]
+kill "${DAEMON_PID}" 2>/dev/null || true
+wait "${DAEMON_PID}" 2>/dev/null || true
+DAEMON_PID=
+
+# A resumed initial build must finish its checkpointed update snapshot even
+# when the PTR published new indices while the daemon was stopped.
+H4=$(hash_of epsilon-file)
+stop_repo
+start_repo incremental
+
+RESUME_PORT=$((PORT_API + 30))
+cat > "${WORK}/resume.conf" <<EOF
+data_dir = ${WORK}/resume-data
+listen_address = 127.0.0.1
+listen_port = ${RESUME_PORT}
+repository_url = http://127.0.0.1:${PORT_REPO}
+repository_access_key = 1111111111111111111111111111111111111111111111111111111111111111
+partitions = 4
+sync_interval_seconds = 3600
+keep_update_cache = true
+log_level = info
+EOF
+
+HYD_TEST_PAUSE_AFTER_CHECKPOINT_MS=3000 "${BIN}" -c "${WORK}/resume.conf" \
+    --sync-once > "${WORK}/resume-first.log" 2>&1 &
+RESUME_PID=$!
+COMPLETED=0
+for _ in $(seq 1 100); do
+    if [ -f "${WORK}/resume-data/store/build.json" ]; then
+        COMPLETED=$(python3 -c \
+            'import json,sys; print(json.load(open(sys.argv[1]))["completed_partitions"])' \
+            "${WORK}/resume-data/store/build.json")
+        [ "${COMPLETED}" -ge 1 ] && break
+    fi
+    sleep 0.1
+done
+kill -9 "${RESUME_PID}" 2>/dev/null || true
+wait "${RESUME_PID}" 2>/dev/null || true
+[ "${COMPLETED}" -ge 1 ]
+[ "${COMPLETED}" -lt 4 ]
+[ -f "${WORK}/resume-data/store/build.json" ]
+
+stop_repo
+start_repo published
+
+"${BIN}" -c "${WORK}/resume.conf" --sync-once > "${WORK}/resume-second.log" 2>&1
+grep -q 'initial-build checkpoint is still valid' "${WORK}/resume-second.log"
+grep -q 'resuming initial build at partition' "${WORK}/resume-second.log"
+grep -q 'catching up on' "${WORK}/resume-second.log"
+"${BIN}" -c "${WORK}/resume.conf" --verify-store | grep -q '6 hashes'
+OUT=$("${BIN}" -c "${WORK}/resume.conf" --query "${H4}")
+echo "${OUT}" | grep -q 'series:epsilon'
+
 echo "integration test passed"

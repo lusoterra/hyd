@@ -82,6 +82,12 @@ and
 .B /update
 relay endpoints when the cache is complete.
 .TP
+.B repair_enabled
+While syncing is enabled, verify cached update files and re-download a file
+that no longer matches its name. A full pass is triggered when the relay finds
+an incomplete cache, at most once per ten minutes. Default true. This only
+changes the update cache, never the query store.
+.TP
 .B download_workers
 Number of parallel update-file downloads. Each worker reuses one TLS
 connection. Default 8; maximum 32.

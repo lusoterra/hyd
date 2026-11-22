@@ -9,6 +9,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace hyd {
 
@@ -73,6 +74,13 @@ struct SyncCallbacks
 // files, and either builds the initial store or appends a delta. Returns
 // false on error. A stop request is reported through stopped rather than as
 // an error.
+//
+// If an initial-build checkpoint matches the persisted repository snapshot,
+// this pass finishes that snapshot without first fetching newer indices. This
+// keeps a long initial build resumable even when the PTR publishes while the
+// daemon is down or the build is running. New indices are fetched as a normal
+// incremental delta after the snapshot is complete (or on the next pass if the
+// repository is temporarily unreachable).
 bool sync_repository(const Config& config, const SyncCallbacks& callbacks, bool& stopped, std::string& error);
 
 // Merges every pending delta file into the immutable base store. This keeps
@@ -89,5 +97,25 @@ std::uint64_t delta_bytes_on_disk(const Config& config);
 
 // Removes downloaded update files that are no longer needed.
 bool clean_update_cache(const Config& config, std::string& error);
+
+struct CacheRepairResult
+{
+    std::uint64_t checked = 0;
+    std::uint64_t missing = 0;
+    std::uint64_t corrupt = 0;
+    std::uint64_t repaired = 0;
+    std::uint64_t failed = 0;
+};
+
+// Verifies every update file referenced by state/repository.json and
+// re-downloads missing or corrupt files. This never touches the query store.
+// Requires keep_update_cache = true.
+bool repair_update_cache(const Config& config, const SyncCallbacks& callbacks,
+    CacheRepairResult& result, std::string& error);
+
+// Repairs only the given update hashes. Used by the running daemon when
+// /update notices that a cached file no longer matches its name.
+bool repair_update_files(const Config& config, const std::vector<Hash>& hashes,
+    const SyncCallbacks& callbacks, CacheRepairResult& result, std::string& error);
 
 } // namespace hyd
