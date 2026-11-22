@@ -24,6 +24,30 @@ constexpr std::int64_t kDefinitionsTypeTags = 1;
 // parser does not understand, so refuse it instead of dropping rows.
 constexpr std::int64_t kUpdateSerialisableVersion = 1;
 
+// The PTR contains exactly four hash definitions that are not any Hydrus hash
+// type. They cannot be queried and the official client stores them as opaque
+// blobs forever. Skip precisely these values; anything else unknown still
+// aborts the sync. Observed 2026-11-22, hash ids 2597984, 62893128, 12009452,
+// and 66588104.
+constexpr std::string_view kKnownInvalidHashes[] = {
+    "0000",
+    "62853295",
+    "aaaaaaaaaaaaaaaaa938879f958d915a01aba9e0327489af",
+    "b3391d6452eb117c41f06c706f604dbb85b575d8c16d0510f5531061e6f749ab832e4769fdce3221803845f02fe1fd",
+};
+
+bool is_known_invalid_hash(std::string_view encoded)
+{
+    for (const auto known : kKnownInvalidHashes)
+    {
+        if (encoded == known)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 std::uint32_t checked_id(std::int64_t value)
 {
     if (value < 0 || value > std::numeric_limits<std::uint32_t>::max())
@@ -141,12 +165,11 @@ bool UpdateParser::parse(std::span<const std::uint8_t> compressed, UpdateVisitor
 
                         if (decoded->size() != 16 && decoded->size() != 20)
                         {
-                            if (!allow_invalid_hashes_)
+                            if (!is_known_invalid_hash(encoded))
                             {
                                 error = "unsupported " + std::to_string(decoded->size())
                                     + "-byte hash definition for hash id " + std::to_string(id)
-                                    + "; refusing to skip it (set allow_invalid_hashes = true to skip "
-                                      "values that cannot be queried)";
+                                    + "; refusing to skip it";
                                 return false;
                             }
 

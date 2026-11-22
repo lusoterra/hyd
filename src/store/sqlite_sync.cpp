@@ -605,7 +605,6 @@ bool sync_sqlite(const Config& config, const SyncCallbacks& callbacks, bool& sto
     }
 
     UpdateParser parser;
-    parser.set_allow_invalid_hashes(config.get_bool("allow_invalid_hashes", false));
     std::unordered_map<std::string, int> kinds;
     if (!load_update_kinds(config.state_dir() / "update_kinds.json", kinds, error))
     {

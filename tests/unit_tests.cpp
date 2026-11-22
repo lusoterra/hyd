@@ -127,13 +127,15 @@ int main()
             void on_invalid_hash_definition(std::uint32_t, std::string_view) override { ++invalid; }
         } invalid_visitor;
 
-        auto odd_bytes = compressed(odd_hash);
-        UpdateParser permissive;
-        permissive.set_allow_invalid_hashes(true);
+        // One of the four known-invalid PTR rows is skipped; other invalid
+        // lengths still fail (tested above).
+        const std::string known_invalid = R"([36, 1, [[0, [[1, "0000"]]]]])";
+        auto known_bytes = compressed(known_invalid);
+        UpdateParser known_parser;
         {
             UpdateKind kind = UpdateKind::unknown;
             std::string parse_error;
-            assert(permissive.parse(odd_bytes, invalid_visitor, kind, parse_error));
+            assert(known_parser.parse(known_bytes, invalid_visitor, kind, parse_error));
             assert(kind == UpdateKind::definitions);
             assert(invalid_visitor.invalid == 1);
         }

@@ -115,7 +115,12 @@ def build_repository(mode):
         repo.add_index(pack(serialise(34, [[9, [[0, []]]]])))
 
     if mode == "badhash":
-        # index 2: a hash definition that is not any valid Hydrus hash type.
+        # index 2: an invalid hash definition that is not one of the four
+        # known PTR values. hydd must refuse to sync.
+        repo.add_index(pack(definitions([(15, "ffff")], [(24, "bad:tag")])))
+
+    if mode == "knownbad":
+        # index 2: one of the four known-invalid PTR values. hydd skips it.
         repo.add_index(pack(definitions([(15, "0000")], [(24, "bad:tag")])))
 
     return repo, {"h1": h1, "h2": h2, "h3": h3}
@@ -167,7 +172,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=45871)
-    parser.add_argument("--mode", choices=["initial", "incremental", "future", "badhash"], default="initial")
+    parser.add_argument("--mode", choices=["initial", "incremental", "future", "badhash", "knownbad"], default="initial")
     args = parser.parse_args()
 
     repo, hashes = build_repository(args.mode)

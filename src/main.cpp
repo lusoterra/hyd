@@ -286,8 +286,7 @@ int scan_update_cache(const hyd::Config& config)
 
     auto worker = [&] {
         hyd::UpdateParser parser;
-        parser.set_allow_invalid_hashes(config.get_bool("allow_invalid_hashes", false));
-        while (true)
+            while (true)
         {
             const auto index = next.fetch_add(1);
             if (index >= paths.size())

@@ -70,23 +70,25 @@ grep -q '"next_index":2' "${WORK}/data/state/sync.json"
 [ "$(find "${WORK}/data/store/delta" -name 'd-*.bin' | wc -l)" -eq 0 ]
 stop_repo
 
-# Invalid hash values fail by default, but can be explicitly skipped.
+# Unknown invalid hash values fail, but the four known PTR values are skipped.
 start_repo badhash
 sed "s|^data_dir = .*|data_dir = ${WORK}/badhash-data|" "${WORK}/hydd.conf" > "${WORK}/hydd-badhash.conf"
 if OUT=$("${BIN}" -c "${WORK}/hydd-badhash.conf" --sync-once 2>&1); then
-    echo "sync with an invalid hash definition should have failed" >&2
+    echo "sync with an unknown invalid hash definition should have failed" >&2
     exit 1
 fi
 echo "${OUT}" | grep -q 'unsupported 2-byte hash definition'
 grep -q '"next_index":0' "${WORK}/badhash-data/state/sync.json"
+stop_repo
 
-cp "${WORK}/hydd-badhash.conf" "${WORK}/hydd-badhash-allow.conf"
-printf 'allow_invalid_hashes = true\nkeep_update_cache = true\n' >> "${WORK}/hydd-badhash-allow.conf"
-"${BIN}" -c "${WORK}/hydd-badhash-allow.conf" --sync-once
-"${BIN}" -c "${WORK}/hydd-badhash-allow.conf" --verify-store | grep -q '3 hashes'
-grep -q '"next_index":3' "${WORK}/badhash-data/state/sync.json"
-"${BIN}" -c "${WORK}/hydd-badhash-allow.conf" --scan-updates | grep -q 'invalid hash'
-"${BIN}" -c "${WORK}/hydd-badhash-allow.conf" --query "${H1}" | grep -q 'series:alpha'
+start_repo knownbad
+sed "s|^data_dir = .*|data_dir = ${WORK}/knownbad-data|" "${WORK}/hydd.conf" > "${WORK}/hydd-knownbad.conf"
+printf 'keep_update_cache = true\n' >> "${WORK}/hydd-knownbad.conf"
+"${BIN}" -c "${WORK}/hydd-knownbad.conf" --sync-once
+"${BIN}" -c "${WORK}/hydd-knownbad.conf" --verify-store | grep -q '3 hashes'
+grep -q '"next_index":3' "${WORK}/knownbad-data/state/sync.json"
+"${BIN}" -c "${WORK}/hydd-knownbad.conf" --scan-updates | grep -q 'invalid hash'
+"${BIN}" -c "${WORK}/hydd-knownbad.conf" --query "${H1}" | grep -q 'series:alpha'
 stop_repo
 
 echo "future-format test passed"

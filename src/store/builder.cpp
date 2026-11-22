@@ -924,7 +924,6 @@ bool build_initial_store(const Config& config, const RepositoryMetadata& metadat
     std::vector<LegacyHashEntry> legacy_hashes;
     DefinitionVisitor definition_visitor(tag_writer, hash_writers, partitions, max_hash_id, legacy_hashes);
     UpdateParser parser;
-    parser.set_allow_invalid_hashes(config.get_bool("allow_invalid_hashes", false));
     std::unordered_map<std::string, int> kinds;
 
     std::size_t processed = 0;
@@ -1232,7 +1231,6 @@ bool apply_incremental(const Config& config, const std::vector<UpdateSource>& so
     const auto partitions = static_cast<std::size_t>(config.partitions());
 
     UpdateParser parser;
-    parser.set_allow_invalid_hashes(config.get_bool("allow_invalid_hashes", false));
     std::unordered_map<std::string, int> kinds;
     if (!load_update_kinds(state_dir / "update_kinds.json", kinds, error))
     {
