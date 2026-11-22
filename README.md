@@ -85,7 +85,7 @@ Implemented read-only endpoints:
 | `GET /client_info` | Boot information |
 | `GET /get_services` | PTR service plus "all known tags" |
 | `GET /get_service` | By name or key |
-| `GET/POST /get_files/file_metadata` | Hashes, services, storage/display tags |
+| `GET/POST /get_files/file_metadata` | Hashes (SHA-256, legacy SHA-1/MD5), services, storage/display tags |
 | `GET/POST /get_files/file_hashes` | SHA-256 to SHA-256 only |
 | `GET /health` | hydd extension: build and sync status |
 
@@ -104,7 +104,7 @@ curl -s -X POST \
 
 ## Notes
 
-- The PTR is a centralized Hydrus server, not peer-to-peer. It publishes only SHA-256 hashes, tags, and tag relationships.
+- The PTR is a centralized Hydrus server, not peer-to-peer. It publishes SHA-256 hashes, tags, and tag relationships. A small number of very old files only have a legacy SHA-1 (or MD5) hash; hydd indexes and preserves those too, and `file_metadata` accepts 40- and 32-character hexadecimal hashes in addition to 64-character SHA-256.
 - Hydrus uses SQLite, but a Hydrus client database is split across several files with a client-specific schema. The SQLite backend here is a simpler mirror schema, not a byte-compatible Hydrus client database. PostgreSQL is not implemented.
 - At the time of writing the PTR has about 3.9 billion mappings, 206 million file hashes, and 55 million tags. A full sync downloads roughly 7-8 GB of update files; keep extra free space for temporary files.
 - The first custom-store build is CPU and I/O heavy because it replays every update file once for definitions and once per partition for mappings. Incremental syncs are small.

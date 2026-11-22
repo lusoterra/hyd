@@ -27,6 +27,8 @@ hash_of() {
 H1=$(hash_of alpha-file)
 H2=$(hash_of beta-file)
 H3=$(hash_of gamma-file)
+L1=$(python3 -c "import hashlib; print(hashlib.sha1(b'legacy-file').hexdigest())")
+L2=$(python3 -c "import hashlib; print(hashlib.sha1(b'legacy-two').hexdigest())")
 
 cat > "${WORK}/hydd.conf" <<EOF
 data_dir = ${WORK}/data
@@ -64,6 +66,10 @@ echo "${OUT}" | grep -q 'creator:gamma'
 OUT=$("${BIN}" -c "${WORK}/hydd.conf" --query "${H3}")
 echo "${OUT}" | grep -q 'not found'
 
+# Legacy SHA-1 hashes must be preserved and queryable.
+OUT=$("${BIN}" -c "${WORK}/hydd.conf" --query "${L1}")
+echo "${OUT}" | grep -q 'series:alpha'
+
 stop_repo
 start_repo incremental
 "${BIN}" -c "${WORK}/hydd.conf" --sync-once
@@ -78,7 +84,10 @@ if echo "${OUT}" | grep -q 'series:alpha'; then
     exit 1
 fi
 
-"${BIN}" -c "${WORK}/hydd.conf" --verify-store | grep -q '3 hashes'
+OUT=$("${BIN}" -c "${WORK}/hydd.conf" --query "${L2}")
+echo "${OUT}" | grep -q 'creator:gamma'
+
+"${BIN}" -c "${WORK}/hydd.conf" --verify-store | grep -q '5 hashes'
 "${BIN}" -c "${WORK}/hydd.conf" --verify-store | grep -q '1 delta records' 2>/dev/null || true
 
 # API checks.
@@ -114,6 +123,21 @@ BODY=$(curl -s -X POST -H 'Content-Type: application/json' \
     "${BASE}/get_files/file_metadata")
 echo "${BODY}" | grep -q '"file_id":null'
 
+# The API also accepts SHA-1 and MD5 hashes.
+BODY=$(curl -s -X POST -H 'Content-Type: application/json' \
+    -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    -d "{\"hashes\":[\"${L1}\"]}" \
+    "${BASE}/get_files/file_metadata")
+echo "${BODY}" | grep -q "${L1}"
+echo "${BODY}" | grep -q 'series:alpha'
+
+BODY=$(curl -s -X POST -H 'Content-Type: application/json' \
+    -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    -d "{\"hashes\":[\"${L2}\"]}" \
+    "${BASE}/get_files/file_metadata")
+echo "${BODY}" | grep -q "${L2}"
+echo "${BODY}" | grep -q 'creator:gamma'
+
 curl -s "${BASE}/health" | grep -q '"built":true'
 
 kill "${DAEMON_PID}" 2>/dev/null || true
@@ -122,11 +146,17 @@ DAEMON_PID=
 
 # Compaction must preserve every query result and remove the delta journal.
 "${BIN}" -c "${WORK}/hydd.conf" --compact
-"${BIN}" -c "${WORK}/hydd.conf" --verify-store | grep -q '3 hashes'
+"${BIN}" -c "${WORK}/hydd.conf" --verify-store | grep -q '5 hashes'
 [ "$(find "${WORK}/data/store/delta" -name 'd-*.bin' | wc -l)" -eq 0 ]
 
 OUT=$("${BIN}" -c "${WORK}/hydd.conf" --query "${H1}")
 echo "${OUT}" | grep -q 'character:beta'
+echo "${OUT}" | grep -q 'creator:gamma'
+
+OUT=$("${BIN}" -c "${WORK}/hydd.conf" --query "${L1}")
+echo "${OUT}" | grep -q 'series:alpha'
+
+OUT=$("${BIN}" -c "${WORK}/hydd.conf" --query "${L2}")
 echo "${OUT}" | grep -q 'creator:gamma'
 
 echo "integration test passed"

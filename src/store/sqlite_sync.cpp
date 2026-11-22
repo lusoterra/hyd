@@ -279,7 +279,7 @@ public:
     }
     bool checkpoint(std::string& error) { return sqlite_exec(db_, "PRAGMA wal_checkpoint(PASSIVE)", error); }
 
-    void add_hash(std::uint32_t hash_id, const Hash& hash)
+    void add_hash(std::uint32_t hash_id, std::span<const std::uint8_t> hash)
     {
         sqlite3_reset(statements_[ins_hash]);
         sqlite3_bind_int64(statements_[ins_hash], 1, static_cast<sqlite3_int64>(hash_id));
@@ -434,6 +434,16 @@ public:
     void on_hash_definition(std::uint32_t hash_id, const Hash& hash) override
     {
         importer_.add_hash(hash_id, hash);
+    }
+
+    void on_unsupported_hash_definition(std::uint32_t hash_id, std::string_view encoded_hash) override
+    {
+        const auto decoded = hex_decode(encoded_hash);
+        if (!decoded || (decoded->size() != 16 && decoded->size() != 20))
+        {
+            return;
+        }
+        importer_.add_hash(hash_id, *decoded);
     }
 
     void on_tag_definition(std::uint32_t tag_id, std::string_view tag) override

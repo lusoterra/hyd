@@ -27,6 +27,8 @@ hash_of() {
 H1=$(hash_of alpha-file)
 H2=$(hash_of beta-file)
 H3=$(hash_of gamma-file)
+L1=$(python3 -c "import hashlib; print(hashlib.sha1(b'legacy-file').hexdigest())")
+L2=$(python3 -c "import hashlib; print(hashlib.sha1(b'legacy-two').hexdigest())")
 
 cat > "${WORK}/hydd.conf" <<EOF
 data_dir = ${WORK}/data
@@ -61,6 +63,9 @@ echo "${OUT}" | grep -q 'character:beta'
 
 [ "$("${BIN}" -c "${WORK}/hydd.conf" --query "${H3}")" = "not found" ]
 
+# Legacy SHA-1 hashes must be preserved and queryable.
+"${BIN}" -c "${WORK}/hydd.conf" --query "${L1}" | grep -q 'series:alpha'
+
 stop_repo
 start_repo incremental
 "${BIN}" -c "${WORK}/hydd.conf" --sync-once
@@ -74,7 +79,9 @@ if echo "${OUT}" | grep -q 'series:alpha'; then
     exit 1
 fi
 
-"${BIN}" -c "${WORK}/hydd.conf" --verify-store | grep -q '3 hashes'
+"${BIN}" -c "${WORK}/hydd.conf" --query "${L2}" | grep -q 'creator:gamma'
+
+"${BIN}" -c "${WORK}/hydd.conf" --verify-store | grep -q '5 hashes'
 "${BIN}" -c "${WORK}/hydd.conf" --verify-store | grep -q 'store ok (sqlite)'
 
 # API against the SQLite backend.
@@ -92,6 +99,18 @@ BODY=$(curl -s -X POST -H 'Content-Type: application/json' \
 echo "${BODY}" | grep -q 'character:delta'
 curl -s "${BASE}/health" | grep -q '"backend":"sqlite"'
 
+BODY=$(curl -s -X POST -H 'Content-Type: application/json' \
+    -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    -d "{\"hashes\":[\"${L1}\"]}" \
+    "${BASE}/get_files/file_metadata")
+echo "${BODY}" | grep -q 'series:alpha'
+
+BODY=$(curl -s -X POST -H 'Content-Type: application/json' \
+    -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    -d "{\"hashes\":[\"${L2}\"]}" \
+    "${BASE}/get_files/file_metadata")
+echo "${BODY}" | grep -q 'creator:gamma'
+
 kill "${DAEMON_PID}" 2>/dev/null || true
 wait "${DAEMON_PID}" 2>/dev/null || true
 DAEMON_PID=
@@ -100,5 +119,6 @@ DAEMON_PID=
 "${BIN}" -c "${WORK}/hydd.conf" --compact
 OUT=$("${BIN}" -c "${WORK}/hydd.conf" --query "${H1}")
 echo "${OUT}" | grep -q 'creator:gamma'
+"${BIN}" -c "${WORK}/hydd.conf" --query "${L2}" | grep -q 'creator:gamma'
 
 echo "sqlite integration test passed"

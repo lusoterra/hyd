@@ -11,7 +11,8 @@ and answers Hydrus Client API queries about file hashes in the same JSON
 language as the Python Hydrus client.
 .PP
 The PTR is a centralized Hydrus server, not a peer-to-peer network. It stores
-only SHA-256 file hashes and their tag mappings; it does not store the files
+SHA-256 file hashes and their tag mappings, plus a small number of legacy
+SHA-1/MD5 hashes from very old files; it does not store the files
 themselves. The default repository is
 .BR https://ptr.hydrus.network:45871 .
 .PP
@@ -43,7 +44,8 @@ updates.
 Run one sync pass, building the store if necessary, then exit.
 .TP
 .BI \-\-query " " HASH
-Print the storage and display tags for a 64-character SHA-256 hash, then exit.
+Print the storage and display tags for a file hash (64-character SHA-256,
+40-character SHA-1, or 32-character MD5), then exit.
 .TP
 .B \-\-compact
 Merge the append-only delta journal into the immutable base store, then exit.

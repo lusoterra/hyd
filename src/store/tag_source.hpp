@@ -24,7 +24,7 @@ class TagSource
 public:
     virtual ~TagSource() = default;
 
-    virtual TagQueryResult lookup(const Hash& hash) const = 0;
+    virtual TagQueryResult lookup(std::span<const std::uint8_t> hash) const = 0;
 
     virtual std::uint64_t total_hash_count() const = 0;
     virtual std::uint64_t total_mapping_count() const = 0;

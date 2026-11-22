@@ -67,6 +67,17 @@ int main()
     }
 
     {
+        const auto sha1 = hash_bytes_from_hex(std::string(40, 'a'));
+        assert(sha1 && sha1->size() == 20);
+        const auto md5 = hash_bytes_from_hex(std::string(32, 'b'));
+        assert(md5 && md5->size() == 16);
+        const auto sha256_value = hash_bytes_from_hex(std::string(64, 'c'));
+        assert(sha256_value && sha256_value->size() == 32);
+        assert(!hash_bytes_from_hex(std::string(42, 'a')));
+        assert(!hash_bytes_from_hex(std::string(40, 'z')));
+    }
+
+    {
         const auto decoded = percent_decode("a%20b%2Fc+d");
         assert(decoded == "a b/c d");
     }

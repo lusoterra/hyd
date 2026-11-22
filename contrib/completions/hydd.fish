@@ -4,7 +4,7 @@ complete -c hydd -s l -l listen -d 'Override API listen address' -r
 complete -c hydd -s p -l port -d 'Override API listen port' -r
 complete -c hydd -l no-sync -d 'Serve the existing store without syncing'
 complete -c hydd -l sync-once -d 'Run one sync pass and exit'
-complete -c hydd -l query -d 'Print tags for a SHA-256 hash and exit' -r
+complete -c hydd -l query -d 'Print tags for a file hash (SHA-256, SHA-1, or MD5) and exit' -r
 complete -c hydd -l compact -d 'Merge pending deltas into the base store and exit'
 complete -c hydd -l verify-store -d 'Open and validate the store and exit'
 complete -c hydd -l print-access-key -d 'Print the API access key and exit'

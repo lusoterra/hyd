@@ -425,10 +425,10 @@ int main(int argc, char** argv)
 
     if (options->query)
     {
-        const auto hash = hyd::hash_from_hex(options->query_hash);
+        const auto hash = hyd::hash_bytes_from_hex(options->query_hash);
         if (!hash)
         {
-            std::cerr << "hydd: invalid SHA-256 hash\n";
+            std::cerr << "hydd: invalid file hash (expected sha256, sha1, or md5)\n";
             return 2;
         }
         if (!runtime.store)

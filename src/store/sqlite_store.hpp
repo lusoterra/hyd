@@ -20,7 +20,7 @@ public:
 
     bool open(const std::filesystem::path& path, std::string& error);
 
-    TagQueryResult lookup(const Hash& hash) const override;
+    TagQueryResult lookup(std::span<const std::uint8_t> hash) const override;
 
     std::uint64_t total_hash_count() const override;
     std::uint64_t total_mapping_count() const override;

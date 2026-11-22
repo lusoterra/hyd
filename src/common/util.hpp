@@ -20,6 +20,9 @@ std::string hex_encode(std::span<const std::uint8_t> bytes);
 std::string hex_encode(const Hash& hash);
 std::optional<Bytes> hex_decode(std::string_view text);
 std::optional<Hash> hash_from_hex(std::string_view text);
+// Decodes a file hash as published by the PTR: SHA-256 (32 bytes), SHA-1
+// (20 bytes), or MD5 (16 bytes). Other lengths are rejected.
+std::optional<Bytes> hash_bytes_from_hex(std::string_view text);
 
 Hash sha256(std::span<const std::uint8_t> bytes);
 Hash sha256(std::string_view text);

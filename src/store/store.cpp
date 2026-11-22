@@ -107,6 +107,22 @@ HashEntry entry_at(const std::uint8_t* base, std::size_t index)
     return entry;
 }
 
+LegacyHashEntry legacy_entry_at(const std::uint8_t* base, std::size_t index)
+{
+    LegacyHashEntry entry;
+    std::memcpy(&entry, base + index * sizeof(LegacyHashEntry), sizeof(entry));
+    return entry;
+}
+
+std::uint32_t partition_of(std::span<const std::uint8_t> hash, std::size_t partitions)
+{
+    if (hash.empty())
+    {
+        return 0;
+    }
+    return (static_cast<std::uint32_t>(hash[0]) * static_cast<std::uint32_t>(partitions)) / 256;
+}
+
 struct PartitionFiles
 {
     MappedFile hashes;
@@ -139,6 +155,10 @@ struct Store::Impl
     std::vector<PartitionFiles> partitions;
     std::vector<TagSegment> tag_segments;
 
+    MappedFile legacy;
+    const std::uint8_t* legacy_entries = nullptr;
+    std::uint32_t legacy_count = 0;
+
     std::unordered_map<std::uint32_t, std::uint32_t> siblings;
     std::unordered_map<std::uint32_t, std::vector<std::uint32_t>> parents;
 };
@@ -155,8 +175,13 @@ Store::~Store()
 
 std::uint32_t Store::partition_for(const Hash& hash) const
 {
-    const auto parts = static_cast<std::uint32_t>(std::max<std::size_t>(1, manifest_.partitions));
-    return (static_cast<std::uint32_t>(hash[0]) * parts) / 256;
+    return partition_for(std::span<const std::uint8_t>(hash.data(), hash.size()));
+}
+
+std::uint32_t Store::partition_for(std::span<const std::uint8_t> hash) const
+{
+    const auto parts = std::max<std::size_t>(1, manifest_.partitions);
+    return partition_of(hash, parts);
 }
 
 bool Store::open(const std::filesystem::path& store_dir, std::string& error)
@@ -242,6 +267,37 @@ bool Store::open(const std::filesystem::path& store_dir, std::string& error)
         files.map_hash_ids = maps_data + 20;
         files.map_offsets = maps_data + 20 + static_cast<std::size_t>(files.map_count) * 4;
         files.map_tags = files.map_offsets + (static_cast<std::size_t>(files.map_count) + 1) * 8;
+    }
+
+    impl_->legacy_entries = nullptr;
+    impl_->legacy_count = 0;
+    impl_->legacy = MappedFile();
+    const auto legacy_path = store_dir / "legacy.bin";
+    if (path_exists(legacy_path))
+    {
+        if (!impl_->legacy.open(legacy_path, error))
+        {
+            return false;
+        }
+        if (impl_->legacy.size() < 12)
+        {
+            error = "legacy hash index is truncated: " + legacy_path.string();
+            return false;
+        }
+        const auto* legacy_data = impl_->legacy.data();
+        if (std::memcmp(legacy_data, kLegacyMagic, 8) != 0)
+        {
+            error = "bad legacy hash index magic: " + legacy_path.string();
+            return false;
+        }
+        impl_->legacy_count = read_u32(legacy_data + 8);
+        if (impl_->legacy.size()
+            < 12 + static_cast<std::size_t>(impl_->legacy_count) * sizeof(LegacyHashEntry))
+        {
+            error = "legacy hash index has an invalid count: " + legacy_path.string();
+            return false;
+        }
+        impl_->legacy_entries = legacy_data + 12;
     }
 
     impl_->tag_segments.clear();
@@ -433,7 +489,7 @@ std::optional<std::string> Store::tag_string(std::uint32_t tag_id) const
     return std::nullopt;
 }
 
-TagQueryResult Store::lookup(const Hash& hash) const
+TagQueryResult Store::lookup(std::span<const std::uint8_t> hash) const
 {
     TagQueryResult result;
 
@@ -448,14 +504,18 @@ TagQueryResult Store::lookup(const Hash& hash) const
     std::uint32_t hash_id = 0;
     bool found = false;
 
+    if (hash.size() == kHashSize)
     {
+        Hash value {};
+        std::copy(hash.begin(), hash.end(), value.begin());
+
         std::size_t low = 0;
         std::size_t high = files.hash_count;
         while (low < high)
         {
             const std::size_t middle = low + (high - low) / 2;
             const auto entry = entry_at(files.hash_entries, middle);
-            if (entry.hash < hash)
+            if (entry.hash < value)
             {
                 low = middle + 1;
             }
@@ -468,23 +528,77 @@ TagQueryResult Store::lookup(const Hash& hash) const
         if (low < files.hash_count)
         {
             const auto entry = entry_at(files.hash_entries, low);
-            if (entry.hash == hash)
+            if (entry.hash == value)
             {
                 hash_id = entry.hash_id;
                 found = true;
             }
         }
-    }
 
-    if (!found && partition < delta_.hashes_by_partition.size())
-    {
-        const auto& delta_hashes = delta_.hashes_by_partition[partition];
-        const auto iterator = std::lower_bound(delta_hashes.begin(), delta_hashes.end(), hash,
-            [](const HashEntry& entry, const Hash& value) { return entry.hash < value; });
-        if (iterator != delta_hashes.end() && iterator->hash == hash)
+        if (!found && partition < delta_.hashes_by_partition.size())
         {
-            hash_id = iterator->hash_id;
+            const auto& delta_hashes = delta_.hashes_by_partition[partition];
+            const auto iterator = std::lower_bound(delta_hashes.begin(), delta_hashes.end(), value,
+                [](const HashEntry& entry, const Hash& lookup) { return entry.hash < lookup; });
+            if (iterator != delta_hashes.end() && iterator->hash == value)
+            {
+                hash_id = iterator->hash_id;
+                found = true;
+            }
+        }
+    }
+    else
+    {
+        const auto matches = [&hash](const LegacyHashEntry& entry) {
+            if (entry.length != hash.size())
+            {
+                return false;
+            }
+            return std::equal(hash.begin(), hash.end(), entry.hash.begin());
+        };
+
+        const auto less = [](const LegacyHashEntry& entry, std::span<const std::uint8_t> value) {
+            if (entry.length != value.size())
+            {
+                return entry.length < value.size();
+            }
+            return std::lexicographical_compare(entry.hash.begin(), entry.hash.begin() + entry.length,
+                value.begin(), value.end());
+        };
+
+        std::size_t low = 0;
+        std::size_t high = impl_->legacy_count;
+        while (low < high)
+        {
+            const std::size_t middle = low + (high - low) / 2;
+            const auto entry = legacy_entry_at(impl_->legacy_entries, middle);
+            if (less(entry, hash))
+            {
+                low = middle + 1;
+            }
+            else
+            {
+                high = middle;
+            }
+        }
+
+        if (low < impl_->legacy_count && matches(legacy_entry_at(impl_->legacy_entries, low)))
+        {
+            hash_id = legacy_entry_at(impl_->legacy_entries, low).hash_id;
             found = true;
+        }
+
+        if (!found)
+        {
+            for (const auto& entry : delta_.legacy_hashes)
+            {
+                if (matches(entry))
+                {
+                    hash_id = entry.hash_id;
+                    found = true;
+                    break;
+                }
+            }
         }
     }
 
@@ -620,7 +734,7 @@ TagQueryResult Store::lookup(const Hash& hash) const
 
 std::uint64_t Store::delta_hash_count() const
 {
-    std::uint64_t total = 0;
+    std::uint64_t total = delta_.legacy_hashes.size();
     for (const auto& partition : delta_.hashes_by_partition)
     {
         total += partition.size();

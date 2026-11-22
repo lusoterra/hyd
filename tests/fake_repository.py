@@ -99,11 +99,12 @@ def build_repository(mode):
     )))
 
     if mode == "incremental":
-        # index 2: one new file and one new tag.
-        repo.add_index(pack(definitions([(12, h3)], [(23, "character:delta")])))
+        # index 2: one new file, one new legacy SHA-1 file and one new tag.
+        legacy_two = hashlib.sha1(b"legacy-two").hexdigest()
+        repo.add_index(pack(definitions([(12, h3), (14, legacy_two)], [(23, "character:delta")])))
         # index 3: add a mapping, delete a mapping, add a parent.
         repo.add_index(pack(content(
-            mapping_add=[(23, [12]), (22, [12])],
+            mapping_add=[(23, [12]), (22, [12]), (22, [14])],
             mapping_delete=[(20, [11])],
             parents=[(0, [(23, 22)])],
         )))

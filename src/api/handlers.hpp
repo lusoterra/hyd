@@ -45,7 +45,7 @@ private:
 
     nlohmann::json services_dict() const;
     nlohmann::json services_list() const;
-    nlohmann::json metadata_row(const Hash& hash, const TagQueryResult& result,
+    nlohmann::json metadata_row(std::span<const std::uint8_t> hash, const TagQueryResult& result,
         bool identifiers_only, bool basic_only, bool include_notes, bool detailed_urls) const;
 
     nlohmann::json base_response() const;

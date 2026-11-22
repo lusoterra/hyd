@@ -14,6 +14,7 @@ namespace hyd {
 void DeltaData::init(std::size_t partitions)
 {
     hashes_by_partition.assign(partitions, {});
+    legacy_hashes.clear();
 }
 
 void DeltaData::absorb(const DeltaData& other)
@@ -32,6 +33,7 @@ void DeltaData::absorb(const DeltaData& other)
         auto& target = hashes_by_partition[i];
         target.insert(target.end(), other.hashes_by_partition[i].begin(), other.hashes_by_partition[i].end());
     }
+    legacy_hashes.insert(legacy_hashes.end(), other.legacy_hashes.begin(), other.legacy_hashes.end());
 
     for (const auto& [hash_id, tag_ids] : other.mapping_additions)
     {
@@ -127,6 +129,7 @@ std::int64_t DeltaData::approximate_bytes() const
     {
         total += static_cast<std::int64_t>(partition.size()) * 40;
     }
+    total += static_cast<std::int64_t>(legacy_hashes.size()) * 40;
     for (const auto& [hash_id, tag_ids] : mapping_additions)
     {
         (void)hash_id;
@@ -261,6 +264,25 @@ bool load_deltas(const std::filesystem::path& directory, std::size_t partitions,
                     data.hashes_by_partition[partition].push_back(entry);
                     break;
                 }
+                case kDeltaLegacyHashDefinition:
+                {
+                    if (length != 37)
+                    {
+                        error = "delta legacy hash definition has unexpected size";
+                        return false;
+                    }
+                    LegacyHashEntry entry;
+                    entry.hash_id = read_u32(payload);
+                    entry.length = payload[4];
+                    if (entry.length != 16 && entry.length != 20 && entry.length != 32)
+                    {
+                        error = "delta legacy hash definition has an unsupported length";
+                        return false;
+                    }
+                    std::copy(payload + 5, payload + 37, entry.hash.begin());
+                    data.legacy_hashes.push_back(entry);
+                    break;
+                }
                 case kDeltaMappingAdd:
                 {
                     if (length != 8)
@@ -386,6 +408,8 @@ bool load_deltas(const std::filesystem::path& directory, std::size_t partitions,
     {
         std::sort(partition.begin(), partition.end(), hash_entry_less);
     }
+
+    std::sort(data.legacy_hashes.begin(), data.legacy_hashes.end(), legacy_hash_entry_less);
 
     return true;
 }

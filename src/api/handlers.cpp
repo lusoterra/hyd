@@ -540,10 +540,10 @@ ApiResponse ApiHandlers::handle_file_metadata(const ApiRequest& request, const n
 
     for (const auto& encoded : encoded_hashes)
     {
-        const auto hash = hash_from_hex(encoded);
+        const auto hash = hash_bytes_from_hex(encoded);
         if (!hash)
         {
-            return text_response(400, "Invalid SHA-256 hash: " + encoded);
+            return text_response(400, "Invalid file hash (expected sha256, sha1, or md5): " + encoded);
         }
 
         const auto result = store->lookup(*hash);
@@ -572,7 +572,7 @@ ApiResponse ApiHandlers::handle_file_metadata(const ApiRequest& request, const n
     return ApiResponse { 200, "application/json", dump_json(body) };
 }
 
-nlohmann::json ApiHandlers::metadata_row(const Hash& hash, const TagQueryResult& result,
+nlohmann::json ApiHandlers::metadata_row(std::span<const std::uint8_t> hash, const TagQueryResult& result,
     bool identifiers_only, bool basic_only, bool include_notes, bool detailed_urls) const
 {
     nlohmann::json row;

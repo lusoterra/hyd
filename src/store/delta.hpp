@@ -18,6 +18,7 @@ struct DeltaData
 {
     std::unordered_map<std::uint32_t, std::string> tags;
     std::vector<std::vector<HashEntry>> hashes_by_partition;
+    std::vector<LegacyHashEntry> legacy_hashes;
 
     std::unordered_map<std::uint32_t, std::vector<std::uint32_t>> mapping_additions;
     std::unordered_set<std::uint64_t> mapping_deletions;

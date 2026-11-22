@@ -52,8 +52,8 @@ public:
     bool is_open() const { return open_; }
 
     // Thread-safe. Returns found=false for hashes the repository has never
-    // seen (or has deleted).
-    TagQueryResult lookup(const Hash& hash) const override;
+    // seen (or has deleted). Accepts SHA-256, SHA-1, and MD5 hash bytes.
+    TagQueryResult lookup(std::span<const std::uint8_t> hash) const override;
 
     std::optional<std::string> tag_string(std::uint32_t tag_id) const;
 
@@ -63,6 +63,7 @@ public:
 
     std::size_t partitions() const { return manifest_.partitions; }
     std::uint32_t partition_for(const Hash& hash) const;
+    std::uint32_t partition_for(std::span<const std::uint8_t> hash) const;
 
     // Exposed for diagnostics.
     std::uint64_t stored_hash_count() const override { return manifest_.hash_count; }

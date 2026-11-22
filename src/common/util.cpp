@@ -86,6 +86,22 @@ std::optional<Hash> hash_from_hex(std::string_view text)
     return hash;
 }
 
+std::optional<Bytes> hash_bytes_from_hex(std::string_view text)
+{
+    auto bytes = hex_decode(text);
+    if (!bytes)
+    {
+        return std::nullopt;
+    }
+
+    if (bytes->size() != 16 && bytes->size() != 20 && bytes->size() != kHashSize)
+    {
+        return std::nullopt;
+    }
+
+    return bytes;
+}
+
 Hash sha256(std::span<const std::uint8_t> bytes)
 {
     Hash out {};

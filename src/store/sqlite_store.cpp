@@ -156,7 +156,7 @@ bool SqliteStore::open(const std::filesystem::path& path, std::string& error)
     return true;
 }
 
-TagQueryResult SqliteStore::lookup(const Hash& hash) const
+TagQueryResult SqliteStore::lookup(std::span<const std::uint8_t> hash) const
 {
     TagQueryResult result;
     if (!open_)

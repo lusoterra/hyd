@@ -218,6 +218,75 @@ bool write_partition_hashes(const std::filesystem::path& path, std::vector<HashE
     return write_file_atomic(path, data, error);
 }
 
+bool write_legacy_hashes(const std::filesystem::path& path, std::vector<LegacyHashEntry>& entries,
+    std::string& error)
+{
+    std::sort(entries.begin(), entries.end(),
+        [](const LegacyHashEntry& left, const LegacyHashEntry& right) {
+            return left.hash_id < right.hash_id;
+        });
+
+    // A hash id is defined once. If a delta repeats a definition, keep the
+    // first copy so lookups stay stable.
+    entries.erase(std::unique(entries.begin(), entries.end(),
+                      [](const LegacyHashEntry& left, const LegacyHashEntry& right) {
+                          return left.hash_id == right.hash_id;
+                      }),
+        entries.end());
+    std::sort(entries.begin(), entries.end(), legacy_hash_entry_less);
+
+    Bytes data;
+    data.resize(12 + entries.size() * sizeof(LegacyHashEntry));
+    std::memcpy(data.data(), kLegacyMagic, 8);
+    write_u32(data.data() + 8, static_cast<std::uint32_t>(entries.size()));
+    if (!entries.empty())
+    {
+        std::memcpy(data.data() + 12, entries.data(), entries.size() * sizeof(LegacyHashEntry));
+    }
+
+    return write_file_atomic(path, data, error);
+}
+
+bool read_legacy_hashes(const std::filesystem::path& path, std::vector<LegacyHashEntry>& entries,
+    std::string& error)
+{
+    entries.clear();
+
+    if (!path_exists(path))
+    {
+        // Format 1 stores (built before legacy hash support) have no file.
+        return true;
+    }
+
+    auto bytes = read_file(path, error);
+    if (!bytes)
+    {
+        return false;
+    }
+
+    if (bytes->size() < 12 || std::memcmp(bytes->data(), kLegacyMagic, 8) != 0)
+    {
+        error = "bad legacy hash index magic in " + path.string();
+        return false;
+    }
+
+    const auto count = read_u32(bytes->data() + 8);
+    if (bytes->size() < 12 + static_cast<std::size_t>(count) * sizeof(LegacyHashEntry))
+    {
+        error = "legacy hash index is truncated in " + path.string();
+        return false;
+    }
+
+    entries.resize(count);
+    if (count > 0)
+    {
+        std::memcpy(entries.data(), bytes->data() + 12,
+            static_cast<std::size_t>(count) * sizeof(LegacyHashEntry));
+    }
+
+    return true;
+}
+
 struct MappingRow
 {
     std::uint32_t hash_id = 0;
@@ -331,8 +400,9 @@ class DefinitionVisitor : public UpdateVisitor
 {
 public:
     DefinitionVisitor(TagSegmentWriter& tags, std::vector<std::ofstream>& hash_writers, std::size_t partitions,
-        std::uint64_t& max_hash_id)
-        : tags_(tags), hash_writers_(hash_writers), partitions_(partitions), max_hash_id_(max_hash_id)
+        std::uint64_t& max_hash_id, std::vector<LegacyHashEntry>& legacy_hashes)
+        : tags_(tags), hash_writers_(hash_writers), partitions_(partitions), max_hash_id_(max_hash_id),
+          legacy_hashes_(legacy_hashes)
     {
     }
 
@@ -348,12 +418,20 @@ public:
 
     void on_unsupported_hash_definition(std::uint32_t hash_id, std::string_view encoded_hash) override
     {
-        (void)hash_id;
-        (void)encoded_hash;
-        ++unsupported_hashes_;
+        const auto decoded = hex_decode(encoded_hash);
+        if (!decoded || (decoded->size() != 16 && decoded->size() != 20))
+        {
+            ++invalid_hashes_;
+            return;
+        }
+
+        legacy_hashes_.push_back(make_legacy_hash_entry(hash_id, *decoded));
+        max_hash_id_ = std::max<std::uint64_t>(max_hash_id_, hash_id);
+        ++legacy_count_;
     }
 
-    std::uint64_t unsupported_hashes() const { return unsupported_hashes_; }
+    std::uint64_t legacy_count() const { return legacy_count_; }
+    std::uint64_t invalid_hashes() const { return invalid_hashes_; }
 
     void on_tag_definition(std::uint32_t tag_id, std::string_view tag) override
     {
@@ -368,7 +446,9 @@ private:
     std::vector<std::ofstream>& hash_writers_;
     std::size_t partitions_;
     std::uint64_t& max_hash_id_;
-    std::uint64_t unsupported_hashes_ = 0;
+    std::vector<LegacyHashEntry>& legacy_hashes_;
+    std::uint64_t legacy_count_ = 0;
+    std::uint64_t invalid_hashes_ = 0;
 };
 
 class PartitionVisitor : public UpdateVisitor
@@ -608,6 +688,22 @@ public:
         ++rows_;
     }
 
+    void on_unsupported_hash_definition(std::uint32_t hash_id, std::string_view encoded_hash) override
+    {
+        const auto decoded = hex_decode(encoded_hash);
+        if (!decoded || (decoded->size() != 16 && decoded->size() != 20))
+        {
+            return;
+        }
+
+        std::uint8_t payload[37] = {};
+        write_u32(payload, hash_id);
+        payload[4] = static_cast<std::uint8_t>(decoded->size());
+        std::memcpy(payload + 5, decoded->data(), decoded->size());
+        writer_.append(kDeltaLegacyHashDefinition, std::span<const std::uint8_t>(payload, sizeof(payload)));
+        ++rows_;
+    }
+
     void on_tag_definition(std::uint32_t tag_id, std::string_view tag) override
     {
         if (tag.size() > 0xffff)
@@ -802,7 +898,8 @@ bool build_initial_store(const Config& config, const RepositoryMetadata& metadat
     }
 
     std::uint64_t max_hash_id = 0;
-    DefinitionVisitor definition_visitor(tag_writer, hash_writers, partitions, max_hash_id);
+    std::vector<LegacyHashEntry> legacy_hashes;
+    DefinitionVisitor definition_visitor(tag_writer, hash_writers, partitions, max_hash_id, legacy_hashes);
     UpdateParser parser;
     std::unordered_map<std::string, int> kinds;
 
@@ -851,10 +948,15 @@ bool build_initial_store(const Config& config, const RepositoryMetadata& metadat
         writer.close();
     }
 
-    if (definition_visitor.unsupported_hashes() > 0)
+    if (!legacy_hashes.empty())
     {
-        HYD_LOGF(info, "ignored %llu legacy hash definitions (not sha256); the mirror indexes sha256 only",
-            static_cast<unsigned long long>(definition_visitor.unsupported_hashes()));
+        HYD_LOGF(info, "found %llu legacy sha1/md5 hash definitions",
+            static_cast<unsigned long long>(legacy_hashes.size()));
+    }
+    if (definition_visitor.invalid_hashes() > 0)
+    {
+        HYD_LOGF(warn, "ignored %llu hash definitions with an unsupported length",
+            static_cast<unsigned long long>(definition_visitor.invalid_hashes()));
     }
 
     if (!tag_writer.finish(error))
@@ -914,6 +1016,15 @@ bool build_initial_store(const Config& config, const RepositoryMetadata& metadat
         {
             membership[entry.hash_id >> 6] |= (1ull << (entry.hash_id & 63));
         }
+        for (const auto& entry : legacy_hashes)
+        {
+            const std::size_t entry_partition =
+                static_cast<std::size_t>(entry.hash[0]) * partitions / 256;
+            if (entry_partition == p)
+            {
+                membership[entry.hash_id >> 6] |= (1ull << (entry.hash_id & 63));
+            }
+        }
 
         std::unordered_map<std::uint32_t, std::vector<std::uint32_t>> mappings;
         mappings.reserve(hash_entries.size());
@@ -963,6 +1074,15 @@ bool build_initial_store(const Config& config, const RepositoryMetadata& metadat
                 hash_entries.end());
         }
 
+        if (!deleted_hashes.empty())
+        {
+            legacy_hashes.erase(std::remove_if(legacy_hashes.begin(), legacy_hashes.end(),
+                                     [&deleted_hashes](const LegacyHashEntry& entry) {
+                                         return deleted_hashes.count(entry.hash_id) != 0;
+                                     }),
+                legacy_hashes.end());
+        }
+
         HYD_LOGF(info, "partition %zu/%zu: %zu hashes, %zu mappings (%zu content updates)",
             p + 1, partitions, hash_entries.size(), mappings.size(), content_files);
 
@@ -996,8 +1116,24 @@ bool build_initial_store(const Config& config, const RepositoryMetadata& metadat
         membership.shrink_to_fit();
     }
 
-    if (!write_pairs(store_dir / "siblings.bin", siblings, error))
+    if (!write_legacy_hashes(store_dir / "legacy.bin", legacy_hashes, error))
     {
+        return false;
+    }
+    stats.hash_count += legacy_hashes.size();
+
+    if (!legacy_hashes.empty())
+    {
+        HYD_LOGF(info, "indexed %llu legacy sha1/md5 hash definitions",
+            static_cast<unsigned long long>(legacy_hashes.size()));
+    }
+    if (definition_visitor.invalid_hashes() > 0)
+    {
+        HYD_LOGF(warn, "ignored %llu hash definitions with an unsupported length",
+            static_cast<unsigned long long>(definition_visitor.invalid_hashes()));
+    }
+
+    if (!write_pairs(store_dir / "siblings.bin", siblings, error))    {
         return false;
     }
     if (!write_pairs(store_dir / "parents.bin", parents, error))
@@ -1737,6 +1873,21 @@ bool compact_store(const Config& config, const SyncCallbacks& callbacks, SyncSta
         return false;
     }
 
+    std::vector<LegacyHashEntry> legacy_hashes;
+    if (!read_legacy_hashes(store_dir / "legacy.bin", legacy_hashes, error))
+    {
+        return false;
+    }
+    legacy_hashes.insert(legacy_hashes.end(), delta.legacy_hashes.begin(), delta.legacy_hashes.end());
+    if (!delta.deleted_files.empty())
+    {
+        legacy_hashes.erase(std::remove_if(legacy_hashes.begin(), legacy_hashes.end(),
+                               [&delta](const LegacyHashEntry& entry) {
+                                   return delta.deleted_files.count(entry.hash_id) != 0;
+                               }),
+            legacy_hashes.end());
+    }
+
     // New tag definitions become a new append-only segment. Tag ids already
     // present in a manifested segment are ignored (this can happen after a
     // crash between writing the manifest and deleting deltas).
@@ -1896,10 +2047,17 @@ bool compact_store(const Config& config, const SyncCallbacks& callbacks, SyncSta
         }
 
         std::unordered_set<std::uint32_t> ids;
-        ids.reserve(hashes.size() + 1024);
+        ids.reserve(hashes.size() + legacy_hashes.size() + 1024);
         for (const auto& entry : hashes)
         {
             ids.insert(entry.hash_id);
+        }
+        for (const auto& entry : legacy_hashes)
+        {
+            if (static_cast<std::size_t>(entry.hash[0]) * partitions / 256 == p)
+            {
+                ids.insert(entry.hash_id);
+            }
         }
 
         if (p < delta.hashes_by_partition.size())
@@ -1978,6 +2136,12 @@ bool compact_store(const Config& config, const SyncCallbacks& callbacks, SyncSta
         HYD_LOGF(debug, "compaction: partition %zu/%zu merged", p + 1, partitions);
     }
 
+    if (!write_legacy_hashes(store_dir / "legacy.bin", legacy_hashes, error))
+    {
+        return false;
+    }
+
+    hash_count += legacy_hashes.size();
     manifest.hash_count = hash_count;
     manifest.mapping_count = mapping_count;
     if (!save_store_manifest(store_dir, manifest, error))
