@@ -88,4 +88,8 @@ if (BASH_PROGRAM)
         COMMAND ${BASH_PROGRAM} ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration_sqlite.sh $<TARGET_FILE:hydd>)
     set_tests_properties(integration_sqlite PROPERTIES TIMEOUT 120)
 
+    add_test(NAME integration_future
+        COMMAND ${BASH_PROGRAM} ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration_future.sh $<TARGET_FILE:hydd>)
+    set_tests_properties(integration_future PROPERTIES TIMEOUT 120)
+
 endif()

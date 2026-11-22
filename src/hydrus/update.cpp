@@ -19,6 +19,11 @@ constexpr std::int64_t kContentUpdateDelete = 1;
 constexpr std::int64_t kDefinitionsTypeHashes = 0;
 constexpr std::int64_t kDefinitionsTypeTags = 1;
 
+// Both the definitions and content serialisables are version 1 on the PTR.
+// A different version means the payload may have changed in a way this
+// parser does not understand, so refuse it instead of dropping rows.
+constexpr std::int64_t kUpdateSerialisableVersion = 1;
+
 std::uint32_t checked_id(std::int64_t value)
 {
     if (value < 0 || value > std::numeric_limits<std::uint32_t>::max())
@@ -72,6 +77,15 @@ bool UpdateParser::parse(std::span<const std::uint8_t> compressed, UpdateVisitor
         }
 
         const auto type = root.at(0).get_int64().value();
+        const auto version = root.at(1).get_int64().value();
+        if (version != kUpdateSerialisableVersion)
+        {
+            error = "unsupported update serialisable version " + std::to_string(version)
+                + " (this build understands " + std::to_string(kUpdateSerialisableVersion)
+                + "); refusing to skip unknown rows";
+            return false;
+        }
+
         if (type == static_cast<std::int64_t>(UpdateKind::definitions))
         {
             kind = UpdateKind::definitions;
@@ -82,18 +96,27 @@ bool UpdateParser::parse(std::span<const std::uint8_t> compressed, UpdateVisitor
                 const auto group = definition_group.get_array();
                 if (group.size() < 2)
                 {
-                    continue;
+                    error = "malformed definition group in definitions update";
+                    return false;
                 }
 
                 const auto definition_type = group.at(0).get_int64().value();
                 const auto definitions = group.at(1).get_array();
+
+                if (definition_type != kDefinitionsTypeHashes && definition_type != kDefinitionsTypeTags)
+                {
+                    error = "unknown definition type " + std::to_string(definition_type)
+                        + "; refusing to skip it";
+                    return false;
+                }
 
                 for (const auto& definition : definitions)
                 {
                     const auto pair = definition.get_array();
                     if (pair.size() < 2)
                     {
-                        continue;
+                        error = "malformed definition row in definitions update";
+                        return false;
                     }
 
                     const auto id = checked_id(pair.at(0).get_int64().value());
@@ -106,19 +129,28 @@ bool UpdateParser::parse(std::span<const std::uint8_t> compressed, UpdateVisitor
                         {
                             visitor.on_hash_definition(id, *hash);
                             ++rows_processed_;
+                            continue;
                         }
-                        else if (const auto decoded = hex_decode(encoded); decoded && !decoded->empty())
-                        {
-                            // The PTR has a handful of legacy SHA-1/MD5 file
-                            // hashes. They cannot be indexed alongside the
-                            // SHA-256 hashes, so let the visitor skip them.
-                            visitor.on_unsupported_hash_definition(id, encoded);
-                        }
-                        else
+
+                        const auto decoded = hex_decode(encoded);
+                        if (!decoded || decoded->empty())
                         {
                             error = "invalid hash definition for hash id " + std::to_string(id);
                             return false;
                         }
+
+                        if (decoded->size() != 16 && decoded->size() != 20)
+                        {
+                            error = "unsupported " + std::to_string(decoded->size())
+                                + "-byte hash definition for hash id " + std::to_string(id)
+                                + "; refusing to skip it";
+                            return false;
+                        }
+
+                        // The PTR has a handful of legacy SHA-1/MD5 file
+                        // hashes. They get their own index instead of being
+                        // mixed with the SHA-256 hashes.
+                        visitor.on_unsupported_hash_definition(id, encoded);
                     }
                     else if (definition_type == kDefinitionsTypeTags)
                     {
@@ -145,18 +177,28 @@ bool UpdateParser::parse(std::span<const std::uint8_t> compressed, UpdateVisitor
             const auto group = content_group.get_array();
             if (group.size() < 2)
             {
-                continue;
+                error = "malformed content group in content update";
+                return false;
             }
 
             const auto content_type = group.at(0).get_int64().value();
             const auto actions = group.at(1).get_array();
+
+            if (content_type != kContentTypeMappings && content_type != kContentTypeTagSiblings
+                && content_type != kContentTypeTagParents && content_type != kContentTypeFiles)
+            {
+                error = "unknown content type " + std::to_string(content_type)
+                    + "; refusing to skip it";
+                return false;
+            }
 
             for (const auto& action_group : actions)
             {
                 const auto action_pair = action_group.get_array();
                 if (action_pair.size() < 2)
                 {
-                    continue;
+                    error = "malformed action row in content update";
+                    return false;
                 }
 
                 const auto action = action_pair.at(0).get_int64().value();
@@ -167,7 +209,9 @@ bool UpdateParser::parse(std::span<const std::uint8_t> compressed, UpdateVisitor
 
                 if (!is_add && !is_delete)
                 {
-                    continue;
+                    error = "unknown content update action " + std::to_string(action)
+                        + "; refusing to skip it";
+                    return false;
                 }
 
                 if (content_type == kContentTypeMappings)
@@ -177,7 +221,8 @@ bool UpdateParser::parse(std::span<const std::uint8_t> compressed, UpdateVisitor
                         const auto mapping = mapping_row.get_array();
                         if (mapping.size() < 2)
                         {
-                            continue;
+                            error = "malformed mapping row in content update";
+                            return false;
                         }
 
                         const auto tag_id = checked_id(mapping.at(0).get_int64().value());
@@ -207,9 +252,13 @@ bool UpdateParser::parse(std::span<const std::uint8_t> compressed, UpdateVisitor
                             const auto fields = file_row.get_array();
                             if (fields.size() < 1)
                             {
-                                continue;
+                                error = "malformed file row in content update";
+                                return false;
                             }
                             const auto hash_id = checked_id(fields.at(0).get_int64().value());
+                            // A file add carries no tag data. Presence is
+                            // already defined by the hash definitions, so this
+                            // is intentionally a no-op rather than a skip.
                             visitor.on_file_add(hash_id);
                             ++rows_processed_;
                         }
@@ -231,7 +280,8 @@ bool UpdateParser::parse(std::span<const std::uint8_t> compressed, UpdateVisitor
                         const auto pair = pair_row.get_array();
                         if (pair.size() < 2)
                         {
-                            continue;
+                            error = "malformed tag pair row in content update";
+                            return false;
                         }
 
                         const auto first = checked_id(pair.at(0).get_int64().value());

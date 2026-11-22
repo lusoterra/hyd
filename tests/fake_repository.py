@@ -109,6 +109,11 @@ def build_repository(mode):
             parents=[(0, [(23, 22)])],
         )))
 
+    if mode == "future":
+        # index 2: a content type this build does not understand. hydd must
+        # refuse to sync instead of silently dropping it.
+        repo.add_index(pack(serialise(34, [[9, [[0, []]]]])))
+
     return repo, {"h1": h1, "h2": h2, "h3": h3}
 
 
@@ -158,7 +163,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=45871)
-    parser.add_argument("--mode", choices=["initial", "incremental"], default="initial")
+    parser.add_argument("--mode", choices=["initial", "incremental", "future"], default="initial")
     args = parser.parse_args()
 
     repo, hashes = build_repository(args.mode)

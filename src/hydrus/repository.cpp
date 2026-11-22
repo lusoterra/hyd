@@ -13,6 +13,8 @@ namespace {
 
 constexpr int kSerialisableTypeMetadata = 37;
 constexpr int kSerialisableTypeHydrusArgs = 21;
+constexpr std::int64_t kHydrusArgsVersion = 2;
+constexpr std::int64_t kMetadataVersion = 1;
 
 } // namespace
 
@@ -137,6 +139,15 @@ bool parse_repository_metadata_json(std::string_view json_text, RepositoryMetada
             return false;
         }
 
+        const auto outer_version = root.at(1).get<std::int64_t>();
+        if (outer_version != kHydrusArgsVersion)
+        {
+            error = "repository metadata has unsupported HydrusArgs version "
+                + std::to_string(outer_version) + " (this build understands "
+                + std::to_string(kHydrusArgsVersion) + ")";
+            return false;
+        }
+
         const auto& args = root.at(2);
         if (!args.is_array() || args.empty())
         {
@@ -176,6 +187,14 @@ bool parse_repository_metadata_json(std::string_view json_text, RepositoryMetada
         if (!value.is_array() || value.size() < 3 || value.at(0).get<int>() != kSerialisableTypeMetadata)
         {
             error = "metadata_slice has an unexpected type";
+            return false;
+        }
+
+        const auto metadata_version = value.at(1).get<std::int64_t>();
+        if (metadata_version != kMetadataVersion)
+        {
+            error = "metadata_slice has unsupported version " + std::to_string(metadata_version)
+                + " (this build understands " + std::to_string(kMetadataVersion) + ")";
             return false;
         }
 
