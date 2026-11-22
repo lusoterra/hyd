@@ -433,6 +433,17 @@ public:
     std::uint64_t legacy_count() const { return legacy_count_; }
     std::uint64_t invalid_hashes() const { return invalid_hashes_; }
 
+    void on_invalid_hash_definition(std::uint32_t hash_id, std::string_view encoded_hash) override
+    {
+        ++invalid_hashes_;
+        if (invalid_hashes_ <= 10)
+        {
+            HYD_LOGF(warn, "skipping invalid %zu-byte hash definition for hash id %llu: %s",
+                encoded_hash.size() / 2, static_cast<unsigned long long>(hash_id),
+                std::string(encoded_hash).c_str());
+        }
+    }
+
     void on_tag_definition(std::uint32_t tag_id, std::string_view tag) override
     {
         if (!tags_.add(tag_id, tag) && !tags_.error.empty())
@@ -704,6 +715,17 @@ public:
         ++rows_;
     }
 
+    void on_invalid_hash_definition(std::uint32_t hash_id, std::string_view encoded_hash) override
+    {
+        if (invalid_hashes_ < 10)
+        {
+            HYD_LOGF(warn, "skipping invalid %zu-byte hash definition for hash id %llu: %s",
+                encoded_hash.size() / 2, static_cast<unsigned long long>(hash_id),
+                std::string(encoded_hash).c_str());
+        }
+        ++invalid_hashes_;
+    }
+
     void on_tag_definition(std::uint32_t tag_id, std::string_view tag) override
     {
         if (tag.size() > 0xffff)
@@ -780,6 +802,7 @@ private:
 
     DeltaWriter& writer_;
     std::uint64_t rows_ = 0;
+    std::uint64_t invalid_hashes_ = 0;
 };
 
 bool save_update_kinds(const std::filesystem::path& path,
@@ -901,6 +924,7 @@ bool build_initial_store(const Config& config, const RepositoryMetadata& metadat
     std::vector<LegacyHashEntry> legacy_hashes;
     DefinitionVisitor definition_visitor(tag_writer, hash_writers, partitions, max_hash_id, legacy_hashes);
     UpdateParser parser;
+    parser.set_allow_invalid_hashes(config.get_bool("allow_invalid_hashes", false));
     std::unordered_map<std::string, int> kinds;
 
     std::size_t processed = 0;
@@ -1208,6 +1232,7 @@ bool apply_incremental(const Config& config, const std::vector<UpdateSource>& so
     const auto partitions = static_cast<std::size_t>(config.partitions());
 
     UpdateParser parser;
+    parser.set_allow_invalid_hashes(config.get_bool("allow_invalid_hashes", false));
     std::unordered_map<std::string, int> kinds;
     if (!load_update_kinds(state_dir / "update_kinds.json", kinds, error))
     {

@@ -77,6 +77,11 @@ Default 512.
 .B keep_update_cache
 Keep downloaded update files after a successful initial build. Default false.
 .TP
+.B allow_invalid_hashes
+The PTR contains a few hash-table rows that are not valid SHA-256, SHA-1, or
+MD5 values and can never be queried. When false (the default), the sync fails
+on them so the loss is not silent. Set to true to log and skip them.
+.TP
 .B download_workers
 Number of parallel update-file downloads. Each worker reuses one TLS
 connection. Default 8; maximum 32.

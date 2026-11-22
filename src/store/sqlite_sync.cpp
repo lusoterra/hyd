@@ -446,6 +446,17 @@ public:
         importer_.add_hash(hash_id, *decoded);
     }
 
+    void on_invalid_hash_definition(std::uint32_t hash_id, std::string_view encoded_hash) override
+    {
+        if (invalid_hashes_ < 10)
+        {
+            HYD_LOGF(warn, "skipping invalid %zu-byte hash definition for hash id %llu: %s",
+                encoded_hash.size() / 2, static_cast<unsigned long long>(hash_id),
+                std::string(encoded_hash).c_str());
+        }
+        ++invalid_hashes_;
+    }
+
     void on_tag_definition(std::uint32_t tag_id, std::string_view tag) override
     {
         importer_.add_tag(tag_id, tag);
@@ -453,6 +464,7 @@ public:
 
 private:
     SqliteImporter& importer_;
+    std::uint64_t invalid_hashes_ = 0;
 };
 
 class SqliteContentVisitor : public UpdateVisitor
@@ -593,6 +605,7 @@ bool sync_sqlite(const Config& config, const SyncCallbacks& callbacks, bool& sto
     }
 
     UpdateParser parser;
+    parser.set_allow_invalid_hashes(config.get_bool("allow_invalid_hashes", false));
     std::unordered_map<std::string, int> kinds;
     if (!load_update_kinds(config.state_dir() / "update_kinds.json", kinds, error))
     {

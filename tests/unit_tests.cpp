@@ -121,6 +121,23 @@ int main()
         result = parse(odd_hash, null_visitor);
         assert(!result.first && result.second.find("unsupported 24-byte hash definition") != std::string::npos);
 
+        struct InvalidVisitor : UpdateVisitor
+        {
+            int invalid = 0;
+            void on_invalid_hash_definition(std::uint32_t, std::string_view) override { ++invalid; }
+        } invalid_visitor;
+
+        auto odd_bytes = compressed(odd_hash);
+        UpdateParser permissive;
+        permissive.set_allow_invalid_hashes(true);
+        {
+            UpdateKind kind = UpdateKind::unknown;
+            std::string parse_error;
+            assert(permissive.parse(odd_bytes, invalid_visitor, kind, parse_error));
+            assert(kind == UpdateKind::definitions);
+            assert(invalid_visitor.invalid == 1);
+        }
+
         result = parse(R"([34, 1, [[0, [[0]]]]])", null_visitor);
         assert(!result.first && result.second.find("malformed action row") != std::string::npos);
 

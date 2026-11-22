@@ -141,10 +141,17 @@ bool UpdateParser::parse(std::span<const std::uint8_t> compressed, UpdateVisitor
 
                         if (decoded->size() != 16 && decoded->size() != 20)
                         {
-                            error = "unsupported " + std::to_string(decoded->size())
-                                + "-byte hash definition for hash id " + std::to_string(id)
-                                + "; refusing to skip it";
-                            return false;
+                            if (!allow_invalid_hashes_)
+                            {
+                                error = "unsupported " + std::to_string(decoded->size())
+                                    + "-byte hash definition for hash id " + std::to_string(id)
+                                    + "; refusing to skip it (set allow_invalid_hashes = true to skip "
+                                      "values that cannot be queried)";
+                                return false;
+                            }
+
+                            visitor.on_invalid_hash_definition(id, encoded);
+                            continue;
                         }
 
                         // The PTR has a handful of legacy SHA-1/MD5 file

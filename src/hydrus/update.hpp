@@ -28,6 +28,14 @@ public:
         (void)hash_id;
         (void)encoded_hash;
     }
+    // Only called when the parser is configured with
+    // allow_invalid_hashes = true. These values are not any Hydrus hash type
+    // and can never be queried.
+    virtual void on_invalid_hash_definition(std::uint32_t hash_id, std::string_view encoded_hash)
+    {
+        (void)hash_id;
+        (void)encoded_hash;
+    }
     virtual void on_tag_definition(std::uint32_t tag_id, std::string_view tag) { (void)tag_id; (void)tag; }
 
     virtual void on_mapping_add(std::uint32_t tag_id, std::uint32_t hash_id) { (void)tag_id; (void)hash_id; }
@@ -56,12 +64,18 @@ public:
     // repository. kind is set even when parsing fails after the header.
     bool parse(std::span<const std::uint8_t> compressed, UpdateVisitor& visitor, UpdateKind& kind, std::string& error);
 
+    // A few PTR rows are not valid hashes at all. By default they are fatal;
+    // this opt-in reports them through on_invalid_hash_definition() and skips
+    // them instead.
+    void set_allow_invalid_hashes(bool allow) { allow_invalid_hashes_ = allow; }
+
     std::uint64_t rows_processed() const { return rows_processed_; }
 
 private:
     struct Impl;
     Impl* impl_;
     std::uint64_t rows_processed_ = 0;
+    bool allow_invalid_hashes_ = false;
 };
 
 } // namespace hyd

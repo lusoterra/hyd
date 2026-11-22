@@ -219,6 +219,7 @@ struct ScanVisitor : hyd::UpdateVisitor
 {
     std::uint64_t hashes = 0;
     std::uint64_t legacy_hashes = 0;
+    std::uint64_t invalid_hashes = 0;
     std::uint64_t tags = 0;
     std::uint64_t mappings = 0;
     std::uint64_t files = 0;
@@ -227,6 +228,7 @@ struct ScanVisitor : hyd::UpdateVisitor
 
     void on_hash_definition(std::uint32_t, const hyd::Hash&) override { ++hashes; }
     void on_unsupported_hash_definition(std::uint32_t, std::string_view) override { ++legacy_hashes; }
+    void on_invalid_hash_definition(std::uint32_t, std::string_view) override { ++invalid_hashes; }
     void on_tag_definition(std::uint32_t, std::string_view) override { ++tags; }
     void on_mapping_add(std::uint32_t, std::uint32_t) override { ++mappings; }
     void on_mapping_delete(std::uint32_t, std::uint32_t) override { ++mappings; }
@@ -271,6 +273,7 @@ int scan_update_cache(const hyd::Config& config)
     std::atomic<std::uint64_t> content { 0 };
     std::atomic<std::uint64_t> hashes { 0 };
     std::atomic<std::uint64_t> legacy_hashes { 0 };
+    std::atomic<std::uint64_t> invalid_hashes { 0 };
     std::atomic<std::uint64_t> tags { 0 };
     std::atomic<std::uint64_t> mappings { 0 };
     std::atomic<std::uint64_t> files { 0 };
@@ -279,9 +282,11 @@ int scan_update_cache(const hyd::Config& config)
 
     std::mutex output_mutex;
     std::vector<std::string> failures;
+    std::vector<std::string> warnings;
 
     auto worker = [&] {
         hyd::UpdateParser parser;
+        parser.set_allow_invalid_hashes(config.get_bool("allow_invalid_hashes", false));
         while (true)
         {
             const auto index = next.fetch_add(1);
@@ -323,11 +328,19 @@ int scan_update_cache(const hyd::Config& config)
                 }
                 hashes += visitor.hashes;
                 legacy_hashes += visitor.legacy_hashes;
+                invalid_hashes += visitor.invalid_hashes;
                 tags += visitor.tags;
                 mappings += visitor.mappings;
                 files += visitor.files;
                 siblings += visitor.siblings;
                 parents += visitor.parents;
+
+                if (visitor.invalid_hashes > 0)
+                {
+                    std::lock_guard<std::mutex> lock(output_mutex);
+                    warnings.push_back(paths[index].filename().string() + ": "
+                        + std::to_string(visitor.invalid_hashes) + " invalid hash definitions");
+                }
             }
             else
             {
@@ -358,9 +371,19 @@ int scan_update_cache(const hyd::Config& config)
 
     std::cout << "scanned " << scanned.load() << " update files: " << definitions.load()
               << " definitions, " << content.load() << " content, " << hashes.load()
-              << " sha256 hashes, " << legacy_hashes.load() << " legacy hashes, " << tags.load()
+              << " sha256 hashes, " << legacy_hashes.load() << " legacy hashes, "
+              << invalid_hashes.load() << " invalid hashes, " << tags.load()
               << " tags, " << mappings.load() << " mappings, " << files.load() << " file records, "
               << siblings.load() << " sibling records, " << parents.load() << " parent records\n";
+
+    if (!warnings.empty())
+    {
+        std::sort(warnings.begin(), warnings.end());
+        for (const auto& warning : warnings)
+        {
+            std::cout << "WARN " << warning << "\n";
+        }
+    }
 
     if (!failures.empty())
     {

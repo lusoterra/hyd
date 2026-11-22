@@ -246,6 +246,7 @@ void Config::dump_effective() const
         get_bool("compression", true) ? "custom" : "sqlite");
     HYD_LOGF(info, "partitions: %d", partitions());
     HYD_LOGF(info, "keep_update_cache: %s", get_bool("keep_update_cache", false) ? "true" : "false");
+    HYD_LOGF(info, "allow_invalid_hashes: %s", get_bool("allow_invalid_hashes", false) ? "true" : "false");
     HYD_LOGF(info, "log_level: %s", get_string("log_level", "info").c_str());
     HYD_LOGF(info, "log_file: %s", get_string("log_file", "(stderr only)").c_str());
     HYD_LOGF(info, "repository_access_key: %s", repository_access_key().empty() ? "(none)" : "(set)");
