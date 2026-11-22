@@ -68,7 +68,17 @@ DownloadSummary download_update_files(const Config& config, const std::vector<Do
             const auto& item = items[index];
             if (path_exists(item.cache_path) && file_size_or_zero(item.cache_path) > 0)
             {
-                continue;
+                std::string verify_error;
+                const auto cached = read_file(item.cache_path, verify_error);
+                if (cached && sha256(*cached) == item.hash)
+                {
+                    continue;
+                }
+
+                HYD_LOGF(warn, "cached update file %s is corrupt; re-downloading",
+                    item.cache_path.string().c_str());
+                std::error_code remove_ec;
+                std::filesystem::remove(item.cache_path, remove_ec);
             }
 
             Bytes body;

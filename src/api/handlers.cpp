@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
 #include <set>
 
 namespace hyd {
@@ -1150,8 +1151,11 @@ ApiResponse ApiHandlers::handle_repository_update(const ApiRequest& request)
 
     if (sha256(*bytes) != *hash)
     {
-        HYD_LOGF(warn, "cached update file %s does not match its name", path.string().c_str());
-        return text_response(500, "cached update file is corrupt");
+        HYD_LOGF(warn, "cached update file %s does not match its name; removing it",
+            path.string().c_str());
+        std::error_code remove_ec;
+        std::filesystem::remove(path, remove_ec);
+        return text_response(500, "cached update file is corrupt and was removed");
     }
 
     return ApiResponse {

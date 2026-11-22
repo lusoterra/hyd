@@ -2100,12 +2100,8 @@ bool save_sync_state(const std::filesystem::path& path, const SyncState& state, 
 
 bool validate_storage_backend(const Config& config, SyncState& state, std::string& error)
 {
-    if (path_exists(config.data_dir() / "sqlite" / "hyd.sqlite3"))
-    {
-        error = "the SQLite backend was removed; use a new data_dir";
-        return false;
-    }
-
+    // The custom store is the only supported backend. Keep the startup save so
+    // sync.json always exists with defaults, but do not reject old directories.
     return save_sync_state(config.state_dir() / "sync.json", state, error);
 }
 

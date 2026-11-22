@@ -14,6 +14,7 @@
 
 - Resumable initial and incremental PTR sync, with a checkpoint after the definitions pass and after each partition.
 - Compact custom store with an append-only delta journal and compaction.
+- Read-only repository relay (`/metadata`, `/update`) from a complete update cache.
 - Tag siblings and parents applied to `display_tags`.
 - Hydrus-compatible access keys, session keys, error codes, and JSON shapes.
 - Rotating log file with gzip retention.
@@ -102,14 +103,38 @@ curl -s -X POST \
   http://127.0.0.1:45869/get_files/file_metadata
 ```
 
+## What hydd is and is not
+
+`hydd` is a read-only PTR mirror. It is not a Hydrus client or a replacement PTR server.
+
+It does:
+
+- download the PTR metadata and update stream;
+- build a compact local tag index for SHA-256 and legacy SHA-1/MD5 hashes;
+- answer the read-only Client API subset documented above;
+- optionally relay the exact cached update stream through `/metadata` and `/update`.
+
+It does not:
+
+- store media, thumbnails, or files;
+- implement file search, tag editing, uploads, petitions, or any mutation;
+- implement Hydrus accounts, registration, account types, permissions, bandwidth/rate limits, janitor review, or voting/petitions;
+- keep the full Hydrus client or server schema, so its data directory cannot be dropped into Hydrus;
+- terminate TLS, or implement PostgreSQL.
+
+The PTR is a Hydrus server with no real website of its own. The official Python client is the UI. Reading is available through a shared read-only access key; uploading tags, deletions, and sibling/parent changes require an account and janitor approval. There is no upvote system - "voting" in Hydrus means mapping/parent/sibling petitions that janitors approve or deny. That account-and-client requirement, plus permissions, rate limits, and janitor review, is the main spam control. `hydd` uses only the read-only public key and never writes.
+
+A read-only relay is still good for decentralisation: it serves the same update files as the source of truth, so it mirrors rather than forks. The PTR remains authoritative.
+
 ## Notes
 
 - The PTR is a centralized Hydrus server, not peer-to-peer. It publishes SHA-256 hashes, tags, and tag relationships. A small number of very old files only have a legacy SHA-1 (or MD5) hash; hydd indexes and preserves those too, and `file_metadata` accepts 40- and 32-character hexadecimal hashes in addition to 64-character SHA-256.
 - If an update contains a serialisable version, definition/content type, action, or metadata version this build does not understand, hydd aborts the sync pass with an error and leaves the existing store untouched instead of silently dropping rows. File-add records are the only known no-op, since they carry no tag data.
-- The PTR contains exactly four hash-table values that are not valid SHA-256/SHA-1/MD5 hashes and can never be queried. Those four are skipped and reported as expected, matching what the official Hydrus client does (it stores them as opaque blobs and never resolves them). Any other invalid value still aborts the sync.
+- The PTR contains exactly four hash-table values that are not valid SHA-256/SHA-1/MD5 hashes and can never be queried. Those four are skipped and reported as expected, matching what the official Hydrus client does (it stores them as opaque blobs and never resolves them). Any other invalid value still aborts the sync. The raw cache and `/metadata`/`/update` relay preserve the four exactly as the PTR served them; only hydd's derived query index omits them.
 - `/health` and `/stats` are hydd extensions and are unauthenticated, like `/api_version`. They expose aggregate counts and sync timing only - no keys, hashes, or tags. `hydd --stats` renders the same data as a human-readable page, including live progress for the one-time initial build (phase, partition, files, bytes, elapsed, ETA), and does not need root or data-directory access. Keep `listen_address = 127.0.0.1` unless you accept publishing those counts.
 - With `keep_update_cache = true` and a complete cache, hydd also serves the read-only repository protocol endpoints `/metadata?since=N` and `/update?update_hash=...`. They require a configured API key (or loopback trust), serve the exact cached update files, and can be used to bootstrap another hydd or a Hydrus client. They never accept uploads or petitions. If the cache is incomplete the metadata endpoint returns 503; `/update` verifies the file's sha256 before serving it. The custom store is not needed for this relay, but keeping it gives fast local query answers.
 - The raw update cache is the archival copy of the PTR stream. It is already zlib-compressed by the server, so it is about 21 GiB for the current corpus, smaller than a compressed Hydrus client database (the client schema has much more overhead and file metadata). A custom store plus the raw cache is roughly 26 GiB + 21 GiB; `keep_update_cache = false` deletes the cache after a successful sync.
+- Cached update files are hash-addressed and verified with SHA-256 before being skipped on a sync; a corrupt entry is deleted and downloaded again. `/update` verifies the file before serving it and removes it on mismatch. A build that fails on malformed content still reports the file; run `hydd --scan-updates` to find every bad entry at once.
 - Loopback TCP peers skip the API key check by default, and a bogus key is ignored too, so local tools work without `sudo -u hyd`. Set `require_localhost_key = true` to require a valid key from localhost as well. The check uses the socket peer, not `X-Forwarded-For`. If a public reverse proxy connects to hydd from localhost, loopback trust makes the read-only API public through that proxy.
 - `access_key` accepts one key or a comma-separated list; `access_key_file` accepts one key per line, with blank lines and `#` comments ignored. Removing a key and restarting revokes it (sessions live in memory, so they are cleared by the restart). `hydd --print-access-key` prints every configured key.
 - `contrib/hyd` (installed as `/usr/bin/hyd`) is a small helper: `hyd FILE` hashes with SHA-256 by default and queries its tags, `hyd --sha1 FILE` and `hyd --md5 FILE` select a legacy hash, `hyd HASH` queries a hash directly, and `hyd stats`, `hyd scan`, `hyd verify`, `hyd version` cover the rest. Set `HYD_BIN` or `HYD_CONFIG` to override the defaults. `hydd --api-query HASH` is the underlying API-backed lookup.

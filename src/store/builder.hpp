@@ -81,8 +81,8 @@ bool sync_repository(const Config& config, const SyncCallbacks& callbacks, bool&
 // simply reapplied on the next run.
 bool compact_store(const Config& config, const SyncCallbacks& callbacks, SyncState& state, std::string& error);
 
-// Rejects a legacy SQLite store; that backend was removed. A custom store is
-// the only supported backend now.
+// Ensures sync state exists with defaults on startup. The custom store is the
+// only backend, and legacy directories are intentionally ignored.
 bool validate_storage_backend(const Config& config, SyncState& state, std::string& error);
 
 std::uint64_t delta_bytes_on_disk(const Config& config);
