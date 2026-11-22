@@ -233,6 +233,9 @@ compressed and 160 GB extracted. hydd's compact read-only store is much
 smaller (roughly 25-30 GB), but a full initial sync needs room for the
 downloaded update stream and temporary definition files (several GB) in
 addition to the final store; plan for about 40-45 GB free.
+The initial build checkpoints after the definitions pass and after every
+partition. If interrupted, the next start resumes at the next partition;
+a changed update set, partition count, or store format causes a rebuild.
 .SH SEE ALSO
 .BR systemctl (1),
 .BR hydd.conf (5),

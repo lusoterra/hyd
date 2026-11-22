@@ -435,12 +435,178 @@ bool write_pairs(const std::filesystem::path& path,
     return write_pairs(path, converted, error);
 }
 
+bool read_checkpoint_pairs(const std::filesystem::path& path,
+    std::unordered_map<std::uint32_t, std::vector<std::uint32_t>>& pairs, std::string& error)
+{
+    pairs.clear();
+
+    if (!path_exists(path))
+    {
+        return true;
+    }
+
+    auto bytes = read_file(path, error);
+    if (!bytes)
+    {
+        return false;
+    }
+
+    if (bytes->size() < 12 || std::memcmp(bytes->data(), kPairsMagic, 8) != 0)
+    {
+        error = "bad pair file magic in " + path.string();
+        return false;
+    }
+
+    const auto count = read_u32(bytes->data() + 8);
+    if (bytes->size() < 12 + static_cast<std::size_t>(count) * 8)
+    {
+        error = "pair file is truncated in " + path.string();
+        return false;
+    }
+
+    for (std::uint32_t i = 0; i < count; ++i)
+    {
+        const auto* row = bytes->data() + 12 + static_cast<std::size_t>(i) * 8;
+        pairs[read_u32(row)].push_back(read_u32(row + 4));
+    }
+
+    return true;
+}
+
+bool read_checkpoint_siblings(const std::filesystem::path& path,
+    std::unordered_map<std::uint32_t, std::uint32_t>& siblings, std::string& error)
+{
+    std::unordered_map<std::uint32_t, std::vector<std::uint32_t>> pairs;
+    if (!read_checkpoint_pairs(path, pairs, error))
+    {
+        return false;
+    }
+
+    siblings.clear();
+    for (const auto& [bad, goods] : pairs)
+    {
+        if (!goods.empty())
+        {
+            siblings[bad] = goods.front();
+        }
+    }
+    return true;
+}
+
+constexpr int kBuildCheckpointVersion = 1;
+
+struct BuildCheckpoint
+{
+    std::uint32_t store_format = kStoreFormatVersion;
+    std::string source_fingerprint;
+    std::uint64_t source_count = 0;
+    std::uint64_t partitions = 0;
+    std::uint64_t completed_partitions = 0;
+    std::uint64_t max_hash_id = 0;
+    std::uint64_t tag_count = 0;
+    std::uint32_t tag_base = 0;
+    std::uint32_t tag_last = 0;
+    std::uint64_t hash_count = 0;
+    std::uint64_t mapping_count = 0;
+    std::int64_t started_at = 0;
+};
+
+bool load_build_checkpoint(const std::filesystem::path& path, BuildCheckpoint& checkpoint,
+    bool& exists, std::string& error)
+{
+    exists = false;
+    checkpoint = BuildCheckpoint {};
+
+    if (!path_exists(path))
+    {
+        return true;
+    }
+
+    auto bytes = read_file(path, error);
+    if (!bytes)
+    {
+        return false;
+    }
+
+    try
+    {
+        const auto root = nlohmann::json::parse(*bytes);
+        if (root.value("version", 0) != kBuildCheckpointVersion)
+        {
+            error = "unsupported initial-build checkpoint version";
+            return false;
+        }
+
+        checkpoint.source_fingerprint = root.value("source_fingerprint", std::string());
+        checkpoint.store_format = root.value("store_format", static_cast<std::uint32_t>(0));
+        checkpoint.source_count = root.value("source_count", static_cast<std::uint64_t>(0));
+        checkpoint.partitions = root.value("partitions", static_cast<std::uint64_t>(0));
+        checkpoint.completed_partitions = root.value("completed_partitions", static_cast<std::uint64_t>(0));
+        checkpoint.max_hash_id = root.value("max_hash_id", static_cast<std::uint64_t>(0));
+        checkpoint.tag_count = root.value("tag_count", static_cast<std::uint64_t>(0));
+        checkpoint.tag_base = root.value("tag_base", static_cast<std::uint32_t>(0));
+        checkpoint.tag_last = root.value("tag_last", static_cast<std::uint32_t>(0));
+        checkpoint.hash_count = root.value("hash_count", static_cast<std::uint64_t>(0));
+        checkpoint.mapping_count = root.value("mapping_count", static_cast<std::uint64_t>(0));
+        checkpoint.started_at = root.value("started_at", static_cast<std::int64_t>(0));
+        exists = true;
+        return true;
+    }
+    catch (const std::exception& exception)
+    {
+        error = std::string("cannot parse initial-build checkpoint: ") + exception.what();
+        return false;
+    }
+}
+
+bool save_build_checkpoint(const std::filesystem::path& path, const BuildCheckpoint& checkpoint,
+    std::string& error)
+{
+    nlohmann::json root;
+    root["version"] = kBuildCheckpointVersion;
+    root["store_format"] = checkpoint.store_format;
+    root["source_fingerprint"] = checkpoint.source_fingerprint;
+    root["source_count"] = checkpoint.source_count;
+    root["partitions"] = checkpoint.partitions;
+    root["completed_partitions"] = checkpoint.completed_partitions;
+    root["max_hash_id"] = checkpoint.max_hash_id;
+    root["tag_count"] = checkpoint.tag_count;
+    root["tag_base"] = checkpoint.tag_base;
+    root["tag_last"] = checkpoint.tag_last;
+    root["hash_count"] = checkpoint.hash_count;
+    root["mapping_count"] = checkpoint.mapping_count;
+    root["started_at"] = checkpoint.started_at;
+
+    return write_file_atomic(path, root.dump(), error);
+}
+
+std::string source_fingerprint(const std::vector<UpdateSource>& sources)
+{
+    std::vector<Hash> hashes;
+    hashes.reserve(sources.size());
+    for (const auto& source : sources)
+    {
+        hashes.push_back(source.update.hash);
+    }
+    std::sort(hashes.begin(), hashes.end());
+
+    Bytes bytes;
+    bytes.reserve(hashes.size() * kHashSize);
+    for (const auto& hash : hashes)
+    {
+        bytes.insert(bytes.end(), hash.begin(), hash.end());
+    }
+
+    return hex_encode(sha256(bytes));
+}
+
 struct BuildStats
 {
     std::uint64_t hash_count = 0;
     std::uint64_t mapping_count = 0;
     std::uint64_t tag_count = 0;
     std::uint32_t tag_base = 0;
+    std::uint32_t tag_last = 0;
 };
 
 class DefinitionVisitor : public UpdateVisitor
@@ -933,30 +1099,109 @@ bool build_initial_store(const Config& config, const RepositoryMetadata& metadat
         sources_total_bytes += source_sizes[i];
     }
 
-    const std::int64_t build_started_at = now_unix();
+    const auto checkpoint_path = store_dir / "build.json";
+    const auto fingerprint = source_fingerprint(sources);
+
+    BuildCheckpoint checkpoint;
+    bool checkpoint_exists = false;
+    if (!load_build_checkpoint(checkpoint_path, checkpoint, checkpoint_exists, error))
+    {
+        HYD_LOGF(warn, "discarding unreadable initial-build checkpoint: %s", error.c_str());
+        error.clear();
+        checkpoint = BuildCheckpoint {};
+        checkpoint_exists = false;
+    }
+
+    bool resume = checkpoint_exists
+        && checkpoint.store_format == kStoreFormatVersion
+        && checkpoint.source_fingerprint == fingerprint
+        && checkpoint.source_count == sources.size()
+        && checkpoint.partitions == partitions
+        && checkpoint.completed_partitions <= partitions
+        && checkpoint.started_at > 0
+        && !path_exists(store_dir / "manifest.json");
+
+    if (resume)
+    {
+        // The tag segment, kinds cache, legacy list, and every finished or
+        // unfinished partition artefact must still be present.
+        resume = path_exists(store_dir / "tags" / "seg-000000.idx")
+            && path_exists(store_dir / "tags" / "seg-000000.str")
+            && path_exists(store_dir / "tags" / "seg-000000.ids")
+            && path_exists(store_dir / "legacy.bin")
+            && path_exists(state_dir / "update_kinds.json")
+            && (checkpoint.completed_partitions == 0
+                || (path_exists(store_dir / "siblings.bin")
+                    && path_exists(store_dir / "parents.bin")));
+
+        for (std::size_t p = 0; resume && p < partitions; ++p)
+        {
+            char name[32];
+            std::snprintf(name, sizeof(name), "p%02zu", p);
+            if (p < checkpoint.completed_partitions)
+            {
+                resume = path_exists(store_dir / name / "hashes.bin")
+                    && path_exists(store_dir / name / "maps.bin");
+            }
+            else
+            {
+                std::snprintf(name, sizeof(name), "defs-%02zu.bin", p);
+                resume = path_exists(store_dir / name);
+            }
+        }
+    }
+
+    if (checkpoint_exists && !resume)
+    {
+        HYD_LOG(info, "discarding a stale initial-build checkpoint; rebuilding from scratch");
+    }
+
+    const std::int64_t build_started_at = resume ? checkpoint.started_at : now_unix();
 
     if (progress != nullptr)
     {
-        progress->phase.store(BuildProgress::phase_definitions);
-        progress->partition.store(0);
-        progress->partitions.store(static_cast<int>(partitions));
-        progress->files_done.store(0);
-        progress->files_total.store(sources.size());
-        progress->bytes_done.store(0);
-        progress->bytes_total.store(sources_total_bytes);
-        progress->hashes.store(0);
-        progress->mappings.store(0);
-        progress->started_at.store(build_started_at);
-        progress->partition_started_at.store(0);
-        progress->updated_at.store(now_unix());
+        if (resume)
+        {
+            progress->phase.store(BuildProgress::phase_partitions);
+            progress->partition.store(static_cast<int>(
+                std::min<std::size_t>(checkpoint.completed_partitions + 1, partitions)));
+            progress->files_done.store(0);
+            progress->files_total.store(0);
+            progress->bytes_done.store(0);
+            progress->bytes_total.store(0);
+            progress->hashes.store(0);
+            progress->mappings.store(0);
+            progress->started_at.store(build_started_at);
+            progress->partition_started_at.store(0);
+            progress->updated_at.store(now_unix());
+            progress->partitions.store(static_cast<int>(partitions));
+        }
+        else
+        {
+            progress->phase.store(BuildProgress::phase_definitions);
+            progress->partition.store(0);
+            progress->partitions.store(static_cast<int>(partitions));
+            progress->files_done.store(0);
+            progress->files_total.store(sources.size());
+            progress->bytes_done.store(0);
+            progress->bytes_total.store(sources_total_bytes);
+            progress->hashes.store(0);
+            progress->mappings.store(0);
+            progress->started_at.store(build_started_at);
+            progress->partition_started_at.store(0);
+            progress->updated_at.store(now_unix());
+        }
     }
 
     std::error_code ec;
-    std::filesystem::remove_all(store_dir, ec);
-    if (ec)
+    if (!resume)
     {
-        error = "cannot clear old store: " + ec.message();
-        return false;
+        std::filesystem::remove_all(store_dir, ec);
+        if (ec)
+        {
+            error = "cannot clear old store: " + ec.message();
+            return false;
+        }
     }
 
     if (!mkdir_p(store_dir / "tags", error) || !mkdir_p(store_dir / "delta", error))
@@ -973,127 +1218,186 @@ bool build_initial_store(const Config& config, const RepositoryMetadata& metadat
         }
     }
 
-    HYD_LOGF(info, "initial sync: building tag dictionary and hash definitions from %zu update files",
-        sources.size());
-
-    TagSegmentWriter tag_writer;
-    if (!tag_writer.open(store_dir / "tags", 0))
+    if (resume)
     {
-        error = tag_writer.error;
-        return false;
+        HYD_LOGF(info, "resuming initial build at partition %llu/%zu",
+            static_cast<unsigned long long>(checkpoint.completed_partitions + 1), partitions);
+    }
+    else
+    {
+        HYD_LOGF(info, "initial sync: building tag dictionary and hash definitions from %zu update files",
+            sources.size());
     }
 
-    std::vector<std::ofstream> hash_writers(partitions);
-    for (std::size_t p = 0; p < partitions; ++p)
-    {
-        char name[32];
-        std::snprintf(name, sizeof(name), "defs-%02zu.bin", p);
-        hash_writers[p].open(store_dir / name, std::ios::binary | std::ios::trunc);
-        if (!hash_writers[p])
-        {
-            error = "cannot create temporary hash definition file";
-            return false;
-        }
-    }
-
-    std::uint64_t max_hash_id = 0;
-    std::vector<LegacyHashEntry> legacy_hashes;
-    DefinitionVisitor definition_visitor(tag_writer, hash_writers, partitions, max_hash_id, legacy_hashes);
     UpdateParser parser;
     std::unordered_map<std::string, int> kinds;
-
-    std::size_t processed = 0;
-    std::uint64_t processed_bytes = 0;
-    auto last_report = std::chrono::steady_clock::now();
-
-    for (std::size_t source_index = 0; source_index < sources.size(); ++source_index)
-    {
-        const auto& source = sources[source_index];
-
-        if (stopped(callbacks))
-        {
-            error = "stopped";
-            return false;
-        }
-
-        auto bytes = read_file(source.cache_path, error);
-        if (!bytes)
-        {
-            return false;
-        }
-
-        UpdateKind kind = UpdateKind::unknown;
-        if (!parser.parse(*bytes, definition_visitor, kind, error))
-        {
-            error = "update " + hex_encode(source.update.hash) + ": " + error;
-            return false;
-        }
-        kinds[hex_encode(source.update.hash)] = static_cast<int>(kind);
-        ++processed;
-        processed_bytes += source_sizes[source_index];
-
-        if (progress != nullptr)
-        {
-            progress->files_done.store(processed);
-            progress->bytes_done.store(processed_bytes);
-            progress->updated_at.store(now_unix());
-        }
-
-        const auto now = std::chrono::steady_clock::now();
-        if (std::chrono::duration<double>(now - last_report).count() > 10.0)
-        {
-            const auto elapsed = now_unix() - build_started_at;
-            const auto eta = processed > 0
-                ? elapsed * static_cast<std::int64_t>(sources.size() - processed)
-                    / static_cast<std::int64_t>(processed)
-                : 0;
-            HYD_LOGF(info,
-                "definitions: %zu/%zu update files (%.1f%%), %s/%s, elapsed %s, ETA %s",
-                processed, sources.size(),
-                progress_percent(processed, sources.size()),
-                human_bytes(processed_bytes).c_str(),
-                human_bytes(sources_total_bytes).c_str(),
-                format_eta(elapsed).c_str(),
-                format_eta(eta).c_str());
-            last_report = now;
-        }
-    }
-
-    for (auto& writer : hash_writers)
-    {
-        writer.flush();
-        if (!writer)
-        {
-            error = "cannot flush temporary hash definition file";
-            return false;
-        }
-        writer.close();
-    }
-
-    if (!legacy_hashes.empty())
-    {
-        HYD_LOGF(info, "found %llu legacy sha1/md5 hash definitions",
-            static_cast<unsigned long long>(legacy_hashes.size()));
-    }
-    if (definition_visitor.invalid_hashes() > 0)
-    {
-        HYD_LOGF(info, "skipped %llu known-invalid PTR hash definitions (expected)",
-            static_cast<unsigned long long>(definition_visitor.invalid_hashes()));
-    }
-
-    if (!tag_writer.finish(error))
-    {
-        return false;
-    }
-
-    if (!save_update_kinds(state_dir / "update_kinds.json", kinds, error))
-    {
-        return false;
-    }
-
+    std::uint64_t max_hash_id = 0;
+    std::vector<LegacyHashEntry> legacy_hashes;
     BuildStats stats;
-    stats.tag_count = tag_writer.count;
-    stats.tag_base = static_cast<std::uint32_t>(tag_writer.base_id);
+
+    if (!resume)
+    {
+        TagSegmentWriter tag_writer;
+        if (!tag_writer.open(store_dir / "tags", 0))
+        {
+            error = tag_writer.error;
+            return false;
+        }
+
+        std::vector<std::ofstream> hash_writers(partitions);
+        for (std::size_t p = 0; p < partitions; ++p)
+        {
+            char name[32];
+            std::snprintf(name, sizeof(name), "defs-%02zu.bin", p);
+            hash_writers[p].open(store_dir / name, std::ios::binary | std::ios::trunc);
+            if (!hash_writers[p])
+            {
+                error = "cannot create temporary hash definition file";
+                return false;
+            }
+        }
+
+        DefinitionVisitor definition_visitor(
+            tag_writer, hash_writers, partitions, max_hash_id, legacy_hashes);
+
+        std::size_t processed = 0;
+        std::uint64_t processed_bytes = 0;
+        auto last_report = std::chrono::steady_clock::now();
+
+        for (std::size_t source_index = 0; source_index < sources.size(); ++source_index)
+        {
+            const auto& source = sources[source_index];
+
+            if (stopped(callbacks))
+            {
+                error = "stopped";
+                return false;
+            }
+
+            auto bytes = read_file(source.cache_path, error);
+            if (!bytes)
+            {
+                return false;
+            }
+
+            UpdateKind kind = UpdateKind::unknown;
+            if (!parser.parse(*bytes, definition_visitor, kind, error))
+            {
+                error = "update " + hex_encode(source.update.hash) + ": " + error;
+                return false;
+            }
+            kinds[hex_encode(source.update.hash)] = static_cast<int>(kind);
+            ++processed;
+            processed_bytes += source_sizes[source_index];
+
+            if (progress != nullptr)
+            {
+                progress->files_done.store(processed);
+                progress->bytes_done.store(processed_bytes);
+                progress->updated_at.store(now_unix());
+            }
+
+            const auto now = std::chrono::steady_clock::now();
+            if (std::chrono::duration<double>(now - last_report).count() > 10.0)
+            {
+                const auto elapsed = now_unix() - build_started_at;
+                const auto eta = processed > 0
+                    ? elapsed * static_cast<std::int64_t>(sources.size() - processed)
+                        / static_cast<std::int64_t>(processed)
+                    : 0;
+                HYD_LOGF(info,
+                    "definitions: %zu/%zu update files (%.1f%%), %s/%s, elapsed %s, ETA %s",
+                    processed, sources.size(),
+                    progress_percent(processed, sources.size()),
+                    human_bytes(processed_bytes).c_str(),
+                    human_bytes(sources_total_bytes).c_str(),
+                    format_eta(elapsed).c_str(),
+                    format_eta(eta).c_str());
+                last_report = now;
+            }
+        }
+
+        for (auto& writer : hash_writers)
+        {
+            writer.flush();
+            if (!writer)
+            {
+                error = "cannot flush temporary hash definition file";
+                return false;
+            }
+            writer.close();
+        }
+
+        if (!legacy_hashes.empty())
+        {
+            HYD_LOGF(info, "found %llu legacy sha1/md5 hash definitions",
+                static_cast<unsigned long long>(legacy_hashes.size()));
+        }
+        if (definition_visitor.invalid_hashes() > 0)
+        {
+            HYD_LOGF(info, "skipped %llu known-invalid PTR hash definitions (expected)",
+                static_cast<unsigned long long>(definition_visitor.invalid_hashes()));
+        }
+
+        if (!tag_writer.finish(error))
+        {
+            return false;
+        }
+
+        if (!save_update_kinds(state_dir / "update_kinds.json", kinds, error))
+        {
+            return false;
+        }
+
+        stats.tag_count = tag_writer.count;
+        stats.tag_base = static_cast<std::uint32_t>(tag_writer.base_id);
+        stats.tag_last = tag_writer.last_id;
+
+        if (!write_legacy_hashes(store_dir / "legacy.bin", legacy_hashes, error))
+        {
+            return false;
+        }
+
+        BuildCheckpoint next;
+        next.source_fingerprint = fingerprint;
+        next.source_count = sources.size();
+        next.partitions = partitions;
+        next.completed_partitions = 0;
+        next.max_hash_id = max_hash_id;
+        next.tag_count = stats.tag_count;
+        next.tag_base = stats.tag_base;
+        next.tag_last = stats.tag_last;
+        next.hash_count = 0;
+        next.mapping_count = 0;
+        next.started_at = build_started_at;
+        if (!save_build_checkpoint(checkpoint_path, next, error))
+        {
+            return false;
+        }
+        checkpoint = std::move(next);
+    }
+    else
+    {
+        if (!load_update_kinds(state_dir / "update_kinds.json", kinds, error))
+        {
+            return false;
+        }
+        if (kinds.empty() && !sources.empty())
+        {
+            error = "initial-build checkpoint has no update kinds";
+            return false;
+        }
+        if (!read_legacy_hashes(store_dir / "legacy.bin", legacy_hashes, error))
+        {
+            return false;
+        }
+        max_hash_id = checkpoint.max_hash_id;
+        stats.tag_count = checkpoint.tag_count;
+        stats.tag_base = checkpoint.tag_base;
+        stats.tag_last = checkpoint.tag_last;
+        stats.hash_count = checkpoint.hash_count;
+        stats.mapping_count = checkpoint.mapping_count;
+    }
 
     std::uint64_t content_total_files = 0;
     std::uint64_t content_total_bytes = 0;
@@ -1112,7 +1416,7 @@ bool build_initial_store(const Config& config, const RepositoryMetadata& metadat
     if (progress != nullptr)
     {
         progress->phase.store(BuildProgress::phase_partitions);
-        progress->partition.store(0);
+        progress->partition.store(static_cast<int>(checkpoint.completed_partitions));
         progress->files_done.store(0);
         progress->files_total.store(content_total_files);
         progress->bytes_done.store(0);
@@ -1130,8 +1434,24 @@ bool build_initial_store(const Config& config, const RepositoryMetadata& metadat
     std::unordered_map<std::uint32_t, std::uint32_t> siblings;
     std::unordered_map<std::uint32_t, std::vector<std::uint32_t>> parents;
 
+    if (resume && checkpoint.completed_partitions > 0)
+    {
+        if (!read_checkpoint_siblings(store_dir / "siblings.bin", siblings, error))
+        {
+            return false;
+        }
+        if (!read_checkpoint_pairs(store_dir / "parents.bin", parents, error))
+        {
+            return false;
+        }
+    }
+
     // Phase B: one pass per partition over all content updates.
-    for (std::size_t p = 0; p < partitions; ++p)
+    const std::size_t starting_partition = resume
+        ? static_cast<std::size_t>(checkpoint.completed_partitions)
+        : 0;
+
+    for (std::size_t p = starting_partition; p < partitions; ++p)
     {
         if (stopped(callbacks))
         {
@@ -1326,6 +1646,43 @@ bool build_initial_store(const Config& config, const RepositoryMetadata& metadat
             stats.mapping_count += tags.size();
         }
 
+        if (p == 0)
+        {
+            if (!write_pairs(store_dir / "siblings.bin", siblings, error))
+            {
+                return false;
+            }
+            if (!write_pairs(store_dir / "parents.bin", parents, error))
+            {
+                return false;
+            }
+        }
+
+        if (!write_legacy_hashes(store_dir / "legacy.bin", legacy_hashes, error))
+        {
+            return false;
+        }
+
+        BuildCheckpoint next;
+        next.source_fingerprint = fingerprint;
+        next.source_count = sources.size();
+        next.partitions = partitions;
+        next.completed_partitions = p + 1;
+        next.max_hash_id = max_hash_id;
+        next.tag_count = stats.tag_count;
+        next.tag_base = stats.tag_base;
+        next.tag_last = stats.tag_last;
+        next.hash_count = stats.hash_count;
+        next.mapping_count = stats.mapping_count;
+        next.started_at = build_started_at;
+        if (!save_build_checkpoint(checkpoint_path, next, error))
+        {
+            return false;
+        }
+        checkpoint = std::move(next);
+
+        HYD_LOGF(info, "checkpoint: partition %zu/%zu complete", p + 1, partitions);
+
         std::error_code remove_ec;
         std::filesystem::remove(defs_path, remove_ec);
 
@@ -1357,6 +1714,14 @@ bool build_initial_store(const Config& config, const RepositoryMetadata& metadat
         return false;
     }
 
+    for (std::size_t p = 0; p < partitions; ++p)
+    {
+        char name[32];
+        std::snprintf(name, sizeof(name), "defs-%02zu.bin", p);
+        std::error_code remove_ec;
+        std::filesystem::remove(store_dir / name, remove_ec);
+    }
+
     StoreManifest manifest;
     manifest.format = kStoreFormatVersion;
     manifest.partitions = static_cast<std::uint32_t>(partitions);
@@ -1365,9 +1730,9 @@ bool build_initial_store(const Config& config, const RepositoryMetadata& metadat
     manifest.tag_count = stats.tag_count;
     manifest.built_at = now_unix();
     manifest.tag_segments.push_back(StoreManifest::TagSegmentInfo {
-        tag_writer.base_id,
-        tag_writer.count,
-        tag_writer.last_id,
+        stats.tag_base,
+        stats.tag_count,
+        stats.tag_last,
         "tags/seg-000000.idx",
         "tags/seg-000000.str",
         "tags/seg-000000.ids",
@@ -1735,8 +2100,6 @@ bool save_sync_state(const std::filesystem::path& path, const SyncState& state, 
 
 bool validate_storage_backend(const Config& config, SyncState& state, std::string& error)
 {
-    (void)state;
-
     if (path_exists(config.data_dir() / "sqlite" / "hyd.sqlite3"))
     {
         error = "the SQLite backend was removed; use a new data_dir";
@@ -1949,6 +2312,12 @@ bool sync_repository(const Config& config, const SyncCallbacks& callbacks, bool&
     if (!save_sync_state(state_path, state, error))
     {
         return false;
+    }
+
+    if (state.built)
+    {
+        std::error_code checkpoint_ec;
+        std::filesystem::remove(config.store_dir() / "build.json", checkpoint_ec);
     }
 
     if (state.built && callbacks.on_store_ready)

@@ -48,6 +48,9 @@ no network access. See `tests/integration.sh`.
   mappings; users can disable it with `compaction_enabled = false`.
 - The custom columnar store is the only supported backend. Do not reintroduce
   the removed SQLite mirror without a deliberate migration and format design.
+- The initial build checkpoints after the definitions pass and after each
+  partition. Resume only when the update set, partition count, and store
+  format match; otherwise rebuild from scratch.
 - Do not add PostgreSQL support yet; it is explicitly deferred.
 - Logging must stay at `/var/log/hyd/hyd.log` by default, rotate at 10 MiB,
   keep 5 gzipped files, and remain configurable.

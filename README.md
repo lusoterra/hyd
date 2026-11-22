@@ -12,7 +12,7 @@
 
 ## Features
 
-- Resumable initial and incremental PTR sync.
+- Resumable initial and incremental PTR sync, with a checkpoint after the definitions pass and after each partition.
 - Compact custom store with an append-only delta journal and compaction.
 - Tag siblings and parents applied to `display_tags`.
 - Hydrus-compatible access keys, session keys, error codes, and JSON shapes.
@@ -116,7 +116,7 @@ curl -s -X POST \
 - `hydd --scan-updates` re-parses every cached update file, verifies its sha256 against the cache filename, and reports all format failures at once. Run it after a large download and before a long build, or after a Hydrus update.
 - Hydrus uses SQLite, but a Hydrus client database is split across several files with a client-specific schema and carries file metadata and history; hydd's store is a smaller read-only mirror schema, not a byte-compatible client or server database. PostgreSQL is not implemented.
 - At the time of writing the PTR has about 4.18 billion mappings, 206 million SHA-256 hashes, and 55 million tags. A full initial sync downloads roughly 21 GiB of already-compressed update files; keep extra free space for the store being built.
-- The first store build is CPU and I/O heavy because it replays every update file once for definitions and once per partition for mappings. Incremental syncs are small.
+- The first store build is CPU and I/O heavy because it replays every update file once for definitions and once per partition for mappings. Incremental syncs are small. The build writes a checkpoint after the definitions pass and after each partition; if it is interrupted, the next start resumes at the next partition. A changed update set, partition count, or store format invalidates the checkpoint and rebuilds from scratch.
 
 ## Testing
 
