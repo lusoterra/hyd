@@ -1,10 +1,12 @@
 #include "common/log.hpp"
 #include "common/util.hpp"
+#include "hydrus/update.hpp"
 #include "store/delta.hpp"
 
 #include <filesystem>
 #include <fstream>
 #include <unistd.h>
+#include <zlib.h>
 
 #include <cassert>
 #include <iostream>
@@ -19,6 +21,49 @@ int main()
         const auto parsed = hash_from_hex(hex_encode(hash));
         assert(parsed && *parsed == hash);
         assert(!hash_from_hex("abc"));
+    }
+
+    {
+        // The PTR carries a few legacy SHA-1/MD5 hash definitions next to the
+        // SHA-256 ones. They must be skipped, not parsed as corruption.
+        const std::string sha256_hex(64, 'a');
+        const std::string sha1_hex(40, 'b');
+        const std::string json = "[36, 1, [[0, [[1, \"" + sha256_hex
+            + "\"], [2, \"" + sha1_hex + "\"]]]]]";
+
+        uLongf compressed_size = compressBound(json.size());
+        Bytes compressed(compressed_size);
+        assert(compress2(compressed.data(), &compressed_size,
+                   reinterpret_cast<const Bytef*>(json.data()), json.size(), Z_BEST_SPEED) == Z_OK);
+        compressed.resize(compressed_size);
+
+        struct Visitor : UpdateVisitor
+        {
+            int supported = 0;
+            int unsupported = 0;
+
+            void on_hash_definition(std::uint32_t hash_id, const Hash& hash) override
+            {
+                assert(hash_id == 1);
+                assert(hex_encode(hash) == std::string(64, 'a'));
+                ++supported;
+            }
+
+            void on_unsupported_hash_definition(std::uint32_t hash_id, std::string_view encoded) override
+            {
+                assert(hash_id == 2);
+                assert(encoded == std::string(40, 'b'));
+                ++unsupported;
+            }
+        } visitor;
+
+        UpdateParser parser;
+        UpdateKind kind = UpdateKind::unknown;
+        std::string parse_error;
+        assert(parser.parse(compressed, visitor, kind, parse_error));
+        assert(kind == UpdateKind::definitions);
+        assert(visitor.supported == 1);
+        assert(visitor.unsupported == 1);
     }
 
     {

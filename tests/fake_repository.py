@@ -82,16 +82,18 @@ def build_repository(mode):
     h1 = sha("alpha-file")
     h2 = sha("beta-file")
     h3 = sha("gamma-file")
+    legacy = hashlib.sha1(b"legacy-file").hexdigest()
 
-    # index 0: definitions for two files and three tags.
+    # index 0: definitions for two files and three tags. The legacy SHA-1
+    # hash mirrors the rare non-SHA-256 definitions the real PTR contains.
     repo.add_index(pack(definitions(
-        [(10, h1), (11, h2)],
+        [(10, h1), (11, h2), (13, legacy)],
         [(20, "series:alpha"), (21, "character:beta"), (22, "creator:gamma")],
     )))
 
     # index 1: mappings, a sibling (20 -> 21) and a parent (21 -> 22).
     repo.add_index(pack(content(
-        mapping_add=[(20, [10, 11]), (21, [10]), (22, [11])],
+        mapping_add=[(20, [10, 11, 13]), (21, [10]), (22, [11])],
         siblings=[(0, [(20, 21)])],
         parents=[(0, [(21, 22)])],
     )))

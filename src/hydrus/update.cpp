@@ -102,13 +102,23 @@ bool UpdateParser::parse(std::span<const std::uint8_t> compressed, UpdateVisitor
                     {
                         const auto encoded = pair.at(1).get_string().value();
                         const auto hash = hash_from_hex(encoded);
-                        if (!hash)
+                        if (hash)
+                        {
+                            visitor.on_hash_definition(id, *hash);
+                            ++rows_processed_;
+                        }
+                        else if (const auto decoded = hex_decode(encoded); decoded && !decoded->empty())
+                        {
+                            // The PTR has a handful of legacy SHA-1/MD5 file
+                            // hashes. They cannot be indexed alongside the
+                            // SHA-256 hashes, so let the visitor skip them.
+                            visitor.on_unsupported_hash_definition(id, encoded);
+                        }
+                        else
                         {
                             error = "invalid hash definition for hash id " + std::to_string(id);
                             return false;
                         }
-                        visitor.on_hash_definition(id, *hash);
-                        ++rows_processed_;
                     }
                     else if (definition_type == kDefinitionsTypeTags)
                     {

@@ -20,6 +20,14 @@ public:
     virtual ~UpdateVisitor() = default;
 
     virtual void on_hash_definition(std::uint32_t hash_id, const Hash& hash) { (void)hash_id; (void)hash; }
+    // The PTR also carries a few legacy SHA-1 (and possibly MD5) file hashes.
+    // The mirror is keyed by SHA-256 only, so those definitions are reported
+    // here instead of being treated as corrupt data.
+    virtual void on_unsupported_hash_definition(std::uint32_t hash_id, std::string_view encoded_hash)
+    {
+        (void)hash_id;
+        (void)encoded_hash;
+    }
     virtual void on_tag_definition(std::uint32_t tag_id, std::string_view tag) { (void)tag_id; (void)tag; }
 
     virtual void on_mapping_add(std::uint32_t tag_id, std::uint32_t hash_id) { (void)tag_id; (void)hash_id; }

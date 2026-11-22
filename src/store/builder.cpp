@@ -346,6 +346,15 @@ public:
         max_hash_id_ = std::max<std::uint64_t>(max_hash_id_, hash_id);
     }
 
+    void on_unsupported_hash_definition(std::uint32_t hash_id, std::string_view encoded_hash) override
+    {
+        (void)hash_id;
+        (void)encoded_hash;
+        ++unsupported_hashes_;
+    }
+
+    std::uint64_t unsupported_hashes() const { return unsupported_hashes_; }
+
     void on_tag_definition(std::uint32_t tag_id, std::string_view tag) override
     {
         if (!tags_.add(tag_id, tag) && !tags_.error.empty())
@@ -359,6 +368,7 @@ private:
     std::vector<std::ofstream>& hash_writers_;
     std::size_t partitions_;
     std::uint64_t& max_hash_id_;
+    std::uint64_t unsupported_hashes_ = 0;
 };
 
 class PartitionVisitor : public UpdateVisitor
@@ -839,6 +849,12 @@ bool build_initial_store(const Config& config, const RepositoryMetadata& metadat
             return false;
         }
         writer.close();
+    }
+
+    if (definition_visitor.unsupported_hashes() > 0)
+    {
+        HYD_LOGF(info, "ignored %llu legacy hash definitions (not sha256); the mirror indexes sha256 only",
+            static_cast<unsigned long long>(definition_visitor.unsupported_hashes()));
     }
 
     if (!tag_writer.finish(error))
