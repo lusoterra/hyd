@@ -148,6 +148,23 @@ curl -s -H "Hydrus-Key: ${KEY}" \
     "${BASE}/update?update_hash=${UPDATE_HASH}" -o "${WORK}/update.bin"
 [ "$(sha256sum "${WORK}/update.bin" | awk '{print $1}')" = "${UPDATE_HASH}" ]
 
+# A second hydd can bootstrap from the relay instead of the PTR.
+cat > "${WORK}/relay-client.conf" <<EOF
+data_dir = ${WORK}/relay-client-data
+listen_address = 127.0.0.1
+listen_port = 46880
+repository_url = ${BASE}
+repository_access_key = ${KEY}
+access_key = ${KEY}
+service_name = relay client
+partitions = 4
+log_level = warn
+EOF
+"${BIN}" -c "${WORK}/relay-client.conf" --sync-once
+"${BIN}" -c "${WORK}/relay-client.conf" --verify-store | grep -q '5 hashes'
+OUT=$("${BIN}" -c "${WORK}/relay-client.conf" --query "${H1}")
+echo "${OUT}" | grep -q 'series:alpha'
+
 # API-backed query and the hyd helper must work without a daemon data dir.
 OUT=$("${BIN}" -c "${WORK}/hydd.conf" -d "${WORK}/api-query-no-data" --api-query "${H1}")
 echo "${OUT}" | grep -q 'series:alpha'
