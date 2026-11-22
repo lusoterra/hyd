@@ -6,7 +6,6 @@
 #include "hydrus/update.hpp"
 #include "store/format.hpp"
 #include "store/store.hpp"
-#include "store/sqlite_sync.hpp"
 #include "store/delta.hpp"
 
 #include <nlohmann/json.hpp>
@@ -1704,7 +1703,6 @@ bool load_sync_state(const std::filesystem::path& path, SyncState& state, std::s
         state.mapping_count = root.value("mapping_count", static_cast<std::uint64_t>(0));
         state.tag_count = root.value("tag_count", static_cast<std::uint64_t>(0));
         state.last_compacted_at = root.value("last_compacted_at", static_cast<std::int64_t>(0));
-        state.backend = root.value("backend", std::string());
         return true;
     }
     catch (const std::exception& exception)
@@ -1731,54 +1729,17 @@ bool save_sync_state(const std::filesystem::path& path, const SyncState& state, 
     root["mapping_count"] = state.mapping_count;
     root["tag_count"] = state.tag_count;
     root["last_compacted_at"] = state.last_compacted_at;
-    root["backend"] = state.backend;
 
     return write_file_atomic(path, root.dump(), error);
 }
 
 bool validate_storage_backend(const Config& config, SyncState& state, std::string& error)
 {
-    const bool desired_custom = config.get_bool("compression", true);
-    const std::string desired = desired_custom ? "custom" : "sqlite";
-    const bool custom_exists = path_exists(config.store_dir() / "manifest.json");
-    const bool sqlite_exists = path_exists(sqlite_store_path(config));
+    (void)state;
 
-    if (state.backend.empty())
+    if (path_exists(config.data_dir() / "sqlite" / "hyd.sqlite3"))
     {
-        if (custom_exists)
-        {
-            state.backend = "custom";
-        }
-        else if (sqlite_exists)
-        {
-            state.backend = "sqlite";
-        }
-        else
-        {
-            state.backend = desired;
-        }
-    }
-
-    if (state.backend != desired)
-    {
-        error = "compression = " + std::string(desired_custom ? "true" : "false")
-            + " does not match the existing " + state.backend
-            + " store in " + config.data_dir().string()
-            + "; use a new data_dir or set compression back";
-        return false;
-    }
-
-    if (desired_custom && !custom_exists && sqlite_exists)
-    {
-        error = "a SQLite store exists but compression = true selects the custom store; "
-            "use a new data_dir or set compression = false";
-        return false;
-    }
-
-    if (!desired_custom && !sqlite_exists && custom_exists)
-    {
-        error = "a custom store exists but compression = false selects SQLite; "
-            "use a new data_dir or set compression = true";
+        error = "the SQLite backend was removed; use a new data_dir";
         return false;
     }
 
@@ -1807,11 +1768,6 @@ bool sync_repository(const Config& config, const SyncCallbacks& callbacks, bool&
     if (!validate_storage_backend(config, state, error))
     {
         return false;
-    }
-
-    if (state.backend == "sqlite")
-    {
-        return sync_sqlite(config, callbacks, stopped_flag, state, error);
     }
 
     const auto manifest_path = config.store_dir() / "manifest.json";

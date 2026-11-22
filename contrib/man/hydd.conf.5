@@ -16,18 +16,6 @@ are ignored. Values may optionally be quoted with single or double quotes.
 Directory for the store, delta journal, state, and generated keys. Default
 .IR /var/lib/hyd .
 .TP
-.B compression
-Select the storage backend.
-.I true
-(the default) uses the compact custom columnar store, roughly 25-30 GB for a
-full mirror.
-.I false
-uses a plain SQLite database at
-.IR <data_dir>/sqlite/hyd.sqlite3 ,
-roughly 45-60 GB and easier to inspect.
-Changing the value after a store exists is refused; use a fresh data
-directory. This is a mirror schema, not the multi-file Hydrus client schema.
-.TP
 .B listen_address ", " listen_port
 API bind address and port. Defaults
 .I 127.0.0.1

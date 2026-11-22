@@ -8,7 +8,6 @@
 #include "stats.hpp"
 #include "store/builder.hpp"
 #include "store/store.hpp"
-#include "store/sqlite_store.hpp"
 #include "store/tag_source.hpp"
 
 #include <fcntl.h>
@@ -420,25 +419,10 @@ struct Runtime
 
 bool reload_store(Runtime& runtime, std::string& error)
 {
-    std::shared_ptr<hyd::TagSource> store;
-
-    if (runtime.config.get_bool("compression", true))
+    auto store = std::make_shared<hyd::Store>();
+    if (!store->open(runtime.config.store_dir(), error))
     {
-        auto custom = std::make_shared<hyd::Store>();
-        if (!custom->open(runtime.config.store_dir(), error))
-        {
-            return false;
-        }
-        store = custom;
-    }
-    else
-    {
-        auto sqlite = std::make_shared<hyd::SqliteStore>();
-        if (!sqlite->open(runtime.config.data_dir() / "sqlite" / "hyd.sqlite3", error))
-        {
-            return false;
-        }
-        store = sqlite;
+        return false;
     }
 
     runtime.handlers->set_store(store);
@@ -737,18 +721,6 @@ int main(int argc, char** argv)
 
     if (options->compact)
     {
-        if (!runtime.config.get_bool("compression", true))
-        {
-            runtime.store.reset();
-            runtime.handlers->set_store(nullptr);
-            if (!hyd::sqlite_vacuum(runtime.config, error))
-            {
-                HYD_LOGF(error, "SQLite vacuum failed: %s", error.c_str());
-                return 1;
-            }
-            return 0;
-        }
-
         hyd::SyncCallbacks callbacks;
         callbacks.should_stop = [] { return g_stop.load(); };
         callbacks.on_store_ready = [&runtime] {

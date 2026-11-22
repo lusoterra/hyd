@@ -24,7 +24,6 @@ struct SyncState
     std::uint64_t downloaded_bytes = 0;
     std::uint64_t downloaded_files = 0;
     std::uint32_t delta_generation = 0;
-    std::string backend; // "custom" or "sqlite"
     std::uint64_t hash_count = 0;
     std::uint64_t mapping_count = 0;
     std::uint64_t tag_count = 0;
@@ -82,11 +81,8 @@ bool sync_repository(const Config& config, const SyncCallbacks& callbacks, bool&
 // simply reapplied on the next run.
 bool compact_store(const Config& config, const SyncCallbacks& callbacks, SyncState& state, std::string& error);
 
-// SQLite backend: vacuums the database (reclaims free pages).
-bool sqlite_vacuum(const Config& config, std::string& error);
-
-// Checks the configured backend against the store on disk. Switching
-// compression after a store exists requires a new data_dir.
+// Rejects a legacy SQLite store; that backend was removed. A custom store is
+// the only supported backend now.
 bool validate_storage_backend(const Config& config, SyncState& state, std::string& error);
 
 std::uint64_t delta_bytes_on_disk(const Config& config);

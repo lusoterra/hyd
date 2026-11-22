@@ -17,8 +17,7 @@ struct TagQueryResult
     std::vector<std::string> display_tags;
 };
 
-// Common read-only interface for the compressed custom store and the plain
-// SQLite backend.
+// Common read-only interface for the custom store.
 class TagSource
 {
 public:

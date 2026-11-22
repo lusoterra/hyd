@@ -46,10 +46,8 @@ no network access. See `tests/integration.sh`.
   `/var/lib/hyd`, and the daemon running as an unprivileged user.
 - Compaction is enabled by default. It must never discard live tags or
   mappings; users can disable it with `compaction_enabled = false`.
-- `compression = true` selects the custom columnar store, `false` selects the
-  plain SQLite mirror. Both must keep the same API behaviour and the same
-  crash-safety guarantees. Switching backends on an existing data directory is
-  refused on purpose.
+- The custom columnar store is the only supported backend. Do not reintroduce
+  the removed SQLite mirror without a deliberate migration and format design.
 - Do not add PostgreSQL support yet; it is explicitly deferred.
 - Logging must stay at `/var/log/hyd/hyd.log` by default, rotate at 10 MiB,
   keep 5 gzipped files, and remain configurable.

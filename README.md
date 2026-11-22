@@ -14,7 +14,6 @@
 
 - Resumable initial and incremental PTR sync.
 - Compact custom store with an append-only delta journal and compaction.
-- Plain SQLite storage mode for a simpler, inspectable full database.
 - Tag siblings and parents applied to `display_tags`.
 - Hydrus-compatible access keys, session keys, error codes, and JSON shapes.
 - Rotating log file with gzip retention.
@@ -24,7 +23,7 @@
 Arch Linux dependencies:
 
 ```sh
-sudo pacman -S --needed cmake ninja gcc curl openssl zlib sqlite nlohmann-json simdjson
+sudo pacman -S --needed cmake ninja gcc curl openssl zlib nlohmann-json simdjson
 ```
 
 ```sh
@@ -46,7 +45,6 @@ The commented default file is [`contrib/hydd.conf`](contrib/hydd.conf). The main
 | `access_key` / `access_key_file` | generated | One or more API keys; comma-separated in config, one per line in the file |
 | `require_localhost_key` | `false` | Require a valid key even on loopback (disables localhost trust) |
 | `repository_url` | `https://ptr.hydrus.network:45871` | Upstream PTR |
-| `compression` | `true` | `true` = hyd's custom store, `false` = SQLite |
 | `partitions` | `16` | Custom-store partitions, power of two |
 | `compaction_enabled` | `true` | Merge the custom store's delta journal |
 | `compact_after_delta_mb` | `512` | Automatic compaction threshold |
@@ -58,11 +56,9 @@ The commented default file is [`contrib/hydd.conf`](contrib/hydd.conf). The main
 | `log_rotate_compress` | `true` | Gzip rotated logs |
 | `keep_update_cache` | `false` | Keep downloaded update files |
 
-### Storage modes
+### Storage
 
-`compression = true` uses a packed columnar store (roughly 25-30 GB for a full mirror). `compression = false` uses a plain SQLite database at `<data_dir>/sqlite/hyd.sqlite3` (roughly 45-60 GB). Both run the same sync engine and answer the same API calls.
-
-Changing `compression` after a store exists is refused. Use a new `data_dir` if you want the other backend.
+hydd uses a packed columnar store (roughly 25-30 GB for a full mirror) with an append-only delta journal. It is not a byte-compatible Hydrus client or server database; it stores the read-only tag facts hydd's API serves. Use a fresh `data_dir` to rebuild from scratch.
 
 ### Logging
 
@@ -118,13 +114,13 @@ curl -s -X POST \
 - `access_key` accepts one key or a comma-separated list; `access_key_file` accepts one key per line, with blank lines and `#` comments ignored. Removing a key and restarting revokes it (sessions live in memory, so they are cleared by the restart). `hydd --print-access-key` prints every configured key.
 - `contrib/hyd` (installed as `/usr/bin/hyd`) is a small helper: `hyd FILE` hashes with SHA-256 by default and queries its tags, `hyd --sha1 FILE` and `hyd --md5 FILE` select a legacy hash, `hyd HASH` queries a hash directly, and `hyd stats`, `hyd scan`, `hyd verify`, `hyd version` cover the rest. Set `HYD_BIN` or `HYD_CONFIG` to override the defaults. `hydd --api-query HASH` is the underlying API-backed lookup.
 - `hydd --scan-updates` re-parses every cached update file, verifies its sha256 against the cache filename, and reports all format failures at once. Run it after a large download and before a long build, or after a Hydrus update.
-- Hydrus uses SQLite, but a Hydrus client database is split across several files with a client-specific schema. The SQLite backend here is a simpler mirror schema, not a byte-compatible Hydrus client database. PostgreSQL is not implemented.
-- At the time of writing the PTR has about 3.9 billion mappings, 206 million file hashes, and 55 million tags. A full sync downloads roughly 7-8 GB of update files; keep extra free space for temporary files.
-- The first custom-store build is CPU and I/O heavy because it replays every update file once for definitions and once per partition for mappings. Incremental syncs are small.
+- Hydrus uses SQLite, but a Hydrus client database is split across several files with a client-specific schema and carries file metadata and history; hydd's store is a smaller read-only mirror schema, not a byte-compatible client or server database. PostgreSQL is not implemented.
+- At the time of writing the PTR has about 4.18 billion mappings, 206 million SHA-256 hashes, and 55 million tags. A full initial sync downloads roughly 21 GiB of already-compressed update files; keep extra free space for the store being built.
+- The first store build is CPU and I/O heavy because it replays every update file once for definitions and once per partition for mappings. Incremental syncs are small.
 
 ## Testing
 
-`ctest` runs unit tests plus fake-repository end-to-end tests for the custom store, SQLite mode, tag deletes, siblings/parents, the API, and compaction. No network is required. Real-PTR tests must stay under 10 GiB; see [AGENTS.md](AGENTS.md).
+`ctest` runs unit tests plus fake-repository end-to-end tests for the custom store, tag deletes, siblings/parents, the API, the repository relay, and compaction. No network is required. Real-PTR tests must stay under 10 GiB; see [AGENTS.md](AGENTS.md).
 
 ## License
 

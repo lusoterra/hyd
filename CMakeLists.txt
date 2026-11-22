@@ -15,7 +15,6 @@ find_package(CURL REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(nlohmann_json REQUIRED)
-find_package(SQLite3 REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SIMDJSON REQUIRED IMPORTED_TARGET simdjson)
 
@@ -29,8 +28,6 @@ add_library(hydcore STATIC
     src/hydrus/update.cpp
     src/stats.cpp
     src/store/store.cpp
-    src/store/sqlite_store.cpp
-    src/store/sqlite_sync.cpp
     src/store/delta.cpp
     src/store/builder.cpp
     src/api/server.cpp
@@ -44,7 +41,6 @@ target_link_libraries(hydcore PUBLIC
     OpenSSL::Crypto
     ZLIB::ZLIB
     nlohmann_json::nlohmann_json
-    SQLite3::SQLite3
     PkgConfig::SIMDJSON
 )
 
@@ -89,10 +85,6 @@ if (BASH_PROGRAM)
     add_test(NAME integration
         COMMAND ${BASH_PROGRAM} ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration.sh $<TARGET_FILE:hydd>)
     set_tests_properties(integration PROPERTIES TIMEOUT 120)
-
-    add_test(NAME integration_sqlite
-        COMMAND ${BASH_PROGRAM} ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration_sqlite.sh $<TARGET_FILE:hydd>)
-    set_tests_properties(integration_sqlite PROPERTIES TIMEOUT 120)
 
     add_test(NAME integration_future
         COMMAND ${BASH_PROGRAM} ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration_future.sh $<TARGET_FILE:hydd>)

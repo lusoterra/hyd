@@ -57,9 +57,7 @@ to require a valid key from localhost too.
 .TP
 .B \-\-compact
 Merge the append-only delta journal into the immutable base store, then exit.
-With
-.B compression = false
-it runs SQLite VACUUM. This never discards live tags or mappings.
+This never discards live tags or mappings.
 .TP
 .B \-\-verify\-store
 Open and validate the store, print its counts, and exit.
@@ -125,15 +123,6 @@ PTR address and the shared read-only key. The defaults point at the real PTR.
 .TP
 .B sync_enabled ", " sync_on_start ", " sync_interval_seconds
 Background sync policy.
-.TP
-.B compression
-Select the storage backend.
-.I true
-(the default) uses the compact custom columnar store.
-.I false
-uses a plain SQLite database at
-.IR <data_dir>/sqlite/hyd.sqlite3 .
-Switching backends requires a fresh data directory.
 .TP
 .B partitions
 Custom-store partition count; must be a power of two. More partitions use less
@@ -244,10 +233,6 @@ compressed and 160 GB extracted. hydd's compact read-only store is much
 smaller (roughly 25-30 GB), but a full initial sync needs room for the
 downloaded update stream and temporary definition files (several GB) in
 addition to the final store; plan for about 40-45 GB free.
-With
-.B compression = false
-the SQLite mirror is roughly 45-60 GB. Changing compression after a store
-exists is refused; use a fresh data directory.
 .SH SEE ALSO
 .BR systemctl (1),
 .BR hydd.conf (5),

@@ -241,9 +241,6 @@ void Config::dump_effective() const
     HYD_LOGF(info, "sync_enabled: %s", get_bool("sync_enabled", true) ? "true" : "false");
     HYD_LOGF(info, "sync_on_start: %s", get_bool("sync_on_start", true) ? "true" : "false");
     HYD_LOGF(info, "sync_interval_seconds: %lld", static_cast<long long>(sync_interval_seconds()));
-    HYD_LOGF(info, "compression: %s (%s backend)",
-        get_bool("compression", true) ? "true" : "false",
-        get_bool("compression", true) ? "custom" : "sqlite");
     HYD_LOGF(info, "partitions: %d", partitions());
     HYD_LOGF(info, "keep_update_cache: %s", get_bool("keep_update_cache", false) ? "true" : "false");
     HYD_LOGF(info, "require_localhost_key: %s", get_bool("require_localhost_key", false) ? "true" : "false");
