@@ -381,4 +381,67 @@ grep -q 'catching up on' "${WORK}/resume-second.log"
 OUT=$("${BIN}" -c "${WORK}/resume.conf" --query "${H4}")
 echo "${OUT}" | grep -q 'series:epsilon'
 
+# Adopt a completed build if the previous process died after writing
+# manifest.json but before saving sync.json and removing build.json.
+stop_repo
+start_repo incremental
+cp -a "${WORK}/data" "${WORK}/adopt-data"
+ADOPT_PORT=$((PORT_API + 40))
+cat > "${WORK}/adopt.conf" <<EOF
+data_dir = ${WORK}/adopt-data
+listen_address = 127.0.0.1
+listen_port = ${ADOPT_PORT}
+repository_url = http://127.0.0.1:${PORT_REPO}
+repository_access_key = 1111111111111111111111111111111111111111111111111111111111111111
+partitions = 4
+sync_interval_seconds = 3600
+keep_update_cache = true
+log_level = info
+EOF
+
+python3 - "${WORK}/adopt-data" <<'PY'
+import hashlib
+import json
+import sys
+
+root = sys.argv[1]
+metadata = json.load(open(root + "/state/repository.json"))
+hashes = []
+for _, _, _, row_hashes in metadata["updates"]:
+    hashes.extend(bytes.fromhex(value) for value in row_hashes)
+
+checkpoint = {
+    "version": 1,
+    "store_format": 2,
+    "source_fingerprint": hashlib.sha256(b"".join(sorted(hashes))).hexdigest(),
+    "source_count": len(hashes),
+    "partitions": 4,
+    "completed_partitions": 4,
+    "max_hash_id": 0,
+    "tag_count": 0,
+    "tag_base": 0,
+    "tag_last": 0,
+    "hash_count": 0,
+    "mapping_count": 0,
+    "started_at": 1,
+}
+json.dump(checkpoint, open(root + "/store/build.json", "w"))
+
+state = json.load(open(root + "/state/sync.json"))
+state["built"] = False
+state["built_at"] = 0
+state["next_index"] = 0
+json.dump(state, open(root + "/state/sync.json", "w"))
+PY
+
+"${BIN}" -c "${WORK}/adopt.conf" --sync-once > "${WORK}/adopt.log" 2>&1
+grep -q 'adopted a completed initial build' "${WORK}/adopt.log"
+if grep -q 'initial sync: building tag dictionary' "${WORK}/adopt.log"; then
+    echo "a completed build was rebuilt instead of adopted" >&2
+    exit 1
+fi
+"${BIN}" -c "${WORK}/adopt.conf" --verify-store | grep -q '5 hashes'
+OUT=$("${BIN}" -c "${WORK}/adopt.conf" --query "${H1}")
+echo "${OUT}" | grep -q 'series:alpha'
+
 echo "integration test passed"

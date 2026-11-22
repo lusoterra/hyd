@@ -602,6 +602,35 @@ std::string source_fingerprint(const std::vector<UpdateSource>& sources)
     return hex_encode(sha256(bytes));
 }
 
+// Builds the update source list for a persisted metadata snapshot. Indices
+// beyond max_update_index are excluded, matching what the initial build would
+// have used.
+void metadata_snapshot(const Config& config, const RepositoryMetadata& metadata,
+    std::int64_t max_index, std::vector<UpdateSource>& snapshot, std::int64_t& highest_index)
+{
+    const auto cache = cache_paths(config);
+    snapshot.clear();
+    snapshot.reserve(metadata.update_file_count());
+    highest_index = -1;
+
+    for (const auto& [index, rows] : metadata.updates)
+    {
+        if (max_index >= 0 && index > max_index)
+        {
+            continue;
+        }
+
+        highest_index = std::max(highest_index, index);
+        for (const auto& update : rows)
+        {
+            UpdateSource source;
+            source.update = update;
+            source.cache_path = update_cache_path(cache, update.hash);
+            snapshot.push_back(std::move(source));
+        }
+    }
+}
+
 // Returns true when store/build.json describes exactly the update snapshot
 // persisted in state/repository.json. This is checked before fetching newer
 // metadata so a publication that happens during a long build (or while the
@@ -636,26 +665,95 @@ bool checkpoint_matches_metadata(const Config& config, const SyncState& state,
         return false;
     }
 
-    const auto cache = cache_paths(config);
     std::vector<UpdateSource> snapshot;
-    snapshot.reserve(metadata.update_file_count());
-    for (const auto& [index, rows] : metadata.updates)
-    {
-        if (max_index >= 0 && index > max_index)
-        {
-            continue;
-        }
-        for (const auto& update : rows)
-        {
-            UpdateSource source;
-            source.update = update;
-            source.cache_path = update_cache_path(cache, update.hash);
-            snapshot.push_back(std::move(source));
-        }
-    }
+    std::int64_t highest_index = -1;
+    metadata_snapshot(config, metadata, max_index, snapshot, highest_index);
+    (void)highest_index;
 
     return snapshot.size() == checkpoint.source_count
         && source_fingerprint(snapshot) == checkpoint.source_fingerprint;
+}
+
+// A process can die after writing the final manifest but before sync.json says
+// built=true and before the checkpoint is removed. In that narrow window the
+// store is complete on disk. Adopt it instead of replaying every partition.
+// Returns false only for a hard error.
+bool try_adopt_finished_build(const Config& config, SyncState& state,
+    const RepositoryMetadata& metadata, std::int64_t max_index, std::string& error)
+{
+    if (state.built || !path_exists(config.store_dir() / "manifest.json"))
+    {
+        return true;
+    }
+
+    bool exists = false;
+    BuildCheckpoint checkpoint;
+    std::string checkpoint_error;
+    if (!load_build_checkpoint(config.store_dir() / "build.json", checkpoint, exists, checkpoint_error))
+    {
+        HYD_LOGF(warn, "cannot adopt a finished build: %s", checkpoint_error.c_str());
+        return true;
+    }
+    if (!exists)
+    {
+        return true;
+    }
+
+    if (checkpoint.store_format != kStoreFormatVersion
+        || checkpoint.partitions != static_cast<std::uint64_t>(config.partitions())
+        || checkpoint.completed_partitions != checkpoint.partitions
+        || checkpoint.partitions == 0
+        || checkpoint.started_at <= 0)
+    {
+        return true;
+    }
+
+    std::vector<UpdateSource> snapshot;
+    std::int64_t highest_index = -1;
+    metadata_snapshot(config, metadata, max_index, snapshot, highest_index);
+    if (snapshot.size() != checkpoint.source_count
+        || source_fingerprint(snapshot) != checkpoint.source_fingerprint)
+    {
+        return true;
+    }
+
+    StoreManifest manifest;
+    std::string manifest_error;
+    if (!load_store_manifest(config.store_dir(), manifest, manifest_error))
+    {
+        HYD_LOGF(warn, "cannot adopt a finished build: %s", manifest_error.c_str());
+        return true;
+    }
+    if (manifest.format != kStoreFormatVersion
+        || manifest.partitions != static_cast<std::uint32_t>(config.partitions())
+        || manifest.built_at <= 0)
+    {
+        return true;
+    }
+
+    state.built = true;
+    state.built_at = manifest.built_at;
+    state.hash_count = manifest.hash_count;
+    state.mapping_count = manifest.mapping_count;
+    state.tag_count = manifest.tag_count;
+    state.next_index = highest_index + 1;
+    state.partial = false;
+
+    if (!save_sync_state(config.state_dir() / "sync.json", state, error))
+    {
+        return false;
+    }
+
+    std::error_code remove_ec;
+    std::filesystem::remove(config.store_dir() / "build.json", remove_ec);
+
+    HYD_LOGF(info,
+        "adopted a completed initial build from manifest.json (%llu hashes, %llu mappings, "
+        "%llu tags); the previous process stopped before saving sync state",
+        static_cast<unsigned long long>(manifest.hash_count),
+        static_cast<unsigned long long>(manifest.mapping_count),
+        static_cast<unsigned long long>(manifest.tag_count));
+    return true;
 }
 
 struct BuildStats
@@ -2235,6 +2333,12 @@ bool sync_repository(const Config& config, const SyncCallbacks& callbacks, bool&
     }
 
     const std::int64_t max_index = config.get_int("max_update_index", -1);
+
+    if (!try_adopt_finished_build(config, state, metadata, max_index, error))
+    {
+        return false;
+    }
+
     if (max_index >= 0 && state.next_index > max_index)
     {
         HYD_LOG(info, "sync is capped by max_update_index; nothing to do");
@@ -2543,11 +2647,10 @@ bool sync_repository(const Config& config, const SyncCallbacks& callbacks, bool&
         }
     }
 
-    HYD_LOGF(info, "sync complete: next index %lld, %llu hashes, %llu mappings, %llu tags",
-        static_cast<long long>(state.next_index),
-        static_cast<unsigned long long>(state.hash_count),
-        static_cast<unsigned long long>(state.mapping_count),
-        static_cast<unsigned long long>(state.tag_count));
+    // Live hash/mapping/tag totals are logged by the on_store_ready callback
+    // after the store is reopened; the counts in sync.json can lag one delta.
+    HYD_LOGF(info, "sync complete: next index %lld",
+        static_cast<long long>(state.next_index));
 
     return true;
 }
