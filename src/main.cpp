@@ -32,7 +32,11 @@
 
 namespace {
 
-constexpr const char* kVersion = "0.2.0";
+#ifndef HYDD_VERSION
+#define HYDD_VERSION "0.0.0"
+#endif
+
+constexpr const char* kVersion = HYDD_VERSION;
 
 std::atomic<bool> g_stop { false };
 
@@ -282,7 +286,6 @@ int scan_update_cache(const hyd::Config& config)
 
     std::mutex output_mutex;
     std::vector<std::string> failures;
-    std::vector<std::string> warnings;
 
     auto worker = [&] {
         hyd::UpdateParser parser;
@@ -333,13 +336,6 @@ int scan_update_cache(const hyd::Config& config)
                 files += visitor.files;
                 siblings += visitor.siblings;
                 parents += visitor.parents;
-
-                if (visitor.invalid_hashes > 0)
-                {
-                    std::lock_guard<std::mutex> lock(output_mutex);
-                    warnings.push_back(paths[index].filename().string() + ": "
-                        + std::to_string(visitor.invalid_hashes) + " invalid hash definitions");
-                }
             }
             else
             {
@@ -371,17 +367,14 @@ int scan_update_cache(const hyd::Config& config)
     std::cout << "scanned " << scanned.load() << " update files: " << definitions.load()
               << " definitions, " << content.load() << " content, " << hashes.load()
               << " sha256 hashes, " << legacy_hashes.load() << " legacy hashes, "
-              << invalid_hashes.load() << " invalid hashes, " << tags.load()
+              << invalid_hashes.load() << " known-invalid hashes, " << tags.load()
               << " tags, " << mappings.load() << " mappings, " << files.load() << " file records, "
               << siblings.load() << " sibling records, " << parents.load() << " parent records\n";
 
-    if (!warnings.empty())
+    if (invalid_hashes.load() > 0)
     {
-        std::sort(warnings.begin(), warnings.end());
-        for (const auto& warning : warnings)
-        {
-            std::cout << "WARN " << warning << "\n";
-        }
+        std::cout << "note: skipped " << invalid_hashes.load()
+                  << " known-invalid PTR hash definitions (expected; they cannot be queried)\n";
     }
 
     if (!failures.empty())

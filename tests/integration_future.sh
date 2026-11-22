@@ -87,7 +87,12 @@ printf 'keep_update_cache = true\n' >> "${WORK}/hydd-knownbad.conf"
 "${BIN}" -c "${WORK}/hydd-knownbad.conf" --sync-once
 "${BIN}" -c "${WORK}/hydd-knownbad.conf" --verify-store | grep -q '3 hashes'
 grep -q '"next_index":3' "${WORK}/knownbad-data/state/sync.json"
-"${BIN}" -c "${WORK}/hydd-knownbad.conf" --scan-updates | grep -q 'invalid hash'
+SCAN_OUT=$("${BIN}" -c "${WORK}/hydd-knownbad.conf" --scan-updates)
+echo "${SCAN_OUT}" | grep -q 'known-invalid PTR hash definitions'
+if echo "${SCAN_OUT}" | grep -q '^WARN'; then
+    echo "known-invalid hashes should not be reported as warnings" >&2
+    exit 1
+fi
 "${BIN}" -c "${WORK}/hydd-knownbad.conf" --query "${H1}" | grep -q 'series:alpha'
 stop_repo
 

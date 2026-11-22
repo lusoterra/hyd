@@ -450,7 +450,7 @@ public:
     {
         if (invalid_hashes_ < 10)
         {
-            HYD_LOGF(warn, "skipping invalid %zu-byte hash definition for hash id %llu: %s",
+            HYD_LOGF(info, "skipping known-invalid %zu-byte PTR hash definition for hash id %llu (expected): %s",
                 encoded_hash.size() / 2, static_cast<unsigned long long>(hash_id),
                 std::string(encoded_hash).c_str());
         }

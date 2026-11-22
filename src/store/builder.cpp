@@ -438,7 +438,7 @@ public:
         ++invalid_hashes_;
         if (invalid_hashes_ <= 10)
         {
-            HYD_LOGF(warn, "skipping invalid %zu-byte hash definition for hash id %llu: %s",
+            HYD_LOGF(info, "skipping known-invalid %zu-byte PTR hash definition for hash id %llu (expected): %s",
                 encoded_hash.size() / 2, static_cast<unsigned long long>(hash_id),
                 std::string(encoded_hash).c_str());
         }
@@ -719,7 +719,7 @@ public:
     {
         if (invalid_hashes_ < 10)
         {
-            HYD_LOGF(warn, "skipping invalid %zu-byte hash definition for hash id %llu: %s",
+            HYD_LOGF(info, "skipping known-invalid %zu-byte PTR hash definition for hash id %llu (expected): %s",
                 encoded_hash.size() / 2, static_cast<unsigned long long>(hash_id),
                 std::string(encoded_hash).c_str());
         }
@@ -978,7 +978,7 @@ bool build_initial_store(const Config& config, const RepositoryMetadata& metadat
     }
     if (definition_visitor.invalid_hashes() > 0)
     {
-        HYD_LOGF(warn, "ignored %llu hash definitions with an unsupported length",
+        HYD_LOGF(info, "skipped %llu known-invalid PTR hash definitions (expected)",
             static_cast<unsigned long long>(definition_visitor.invalid_hashes()));
     }
 
@@ -1150,13 +1150,9 @@ bool build_initial_store(const Config& config, const RepositoryMetadata& metadat
         HYD_LOGF(info, "indexed %llu legacy sha1/md5 hash definitions",
             static_cast<unsigned long long>(legacy_hashes.size()));
     }
-    if (definition_visitor.invalid_hashes() > 0)
-    {
-        HYD_LOGF(warn, "ignored %llu hash definitions with an unsupported length",
-            static_cast<unsigned long long>(definition_visitor.invalid_hashes()));
-    }
 
-    if (!write_pairs(store_dir / "siblings.bin", siblings, error))    {
+    if (!write_pairs(store_dir / "siblings.bin", siblings, error))
+    {
         return false;
     }
     if (!write_pairs(store_dir / "parents.bin", parents, error))
