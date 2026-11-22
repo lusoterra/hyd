@@ -97,8 +97,18 @@ echo "${OUT}" | grep -q 'creator:gamma'
 DAEMON_PID=$!
 sleep 0.8
 
+# --stats must work unprivileged and without touching the data directory.
+STATS=$("${BIN}" -c "${WORK}/hydd.conf" -d "${WORK}/stats-no-data" --stats)
+echo "${STATS}" | grep -q 'SHA-256'
+echo "${STATS}" | grep -q 'Mappings'
+echo "${STATS}" | grep -q 'ready'
+[ ! -e "${WORK}/stats-no-data" ]
+curl -s "http://127.0.0.1:${PORT_API}/stats" | grep -q '"built":true'
+
 KEY=2222222222222222222222222222222222222222222222222222222222222222
 BASE="http://127.0.0.1:${PORT_API}"
+VERSION=$("${BIN}" --version | awk '{print $2}')
+curl -s "${BASE}/api_version" | grep -q "\"hyd_version\":\"${VERSION}\""
 
 [ "$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/get_services")" = "401" ]
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: bad" "${BASE}/get_services")" = "403" ]
@@ -145,6 +155,13 @@ curl -s "${BASE}/health" | grep -q '"built":true'
 kill "${DAEMON_PID}" 2>/dev/null || true
 wait "${DAEMON_PID}" 2>/dev/null || true
 DAEMON_PID=
+
+# With the daemon stopped, --stats must fail with a useful message.
+if STATS_OUT=$("${BIN}" -c "${WORK}/hydd.conf" --stats 2>&1); then
+    echo "--stats should fail when the API is down" >&2
+    exit 1
+fi
+echo "${STATS_OUT}" | grep -q 'cannot reach the API'
 
 # Compaction must preserve every query result and remove the delta journal.
 "${BIN}" -c "${WORK}/hydd.conf" --compact

@@ -37,6 +37,10 @@ public:
     virtual std::uint64_t stored_tag_count() const { return total_tag_count(); }
     virtual std::uint64_t delta_record_count() const { return 0; }
     virtual std::uint64_t delta_hash_count() const { return 0; }
+    virtual std::uint64_t total_sibling_count() const { return 0; }
+    virtual std::uint64_t total_parent_count() const { return 0; }
+    virtual std::uint64_t legacy_hash_count() const { return 0; }
+    virtual std::size_t partition_count() const { return 0; }
 };
 
 } // namespace hyd

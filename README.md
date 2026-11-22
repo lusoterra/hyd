@@ -88,8 +88,9 @@ Implemented read-only endpoints:
 | `GET/POST /get_files/file_metadata` | Hashes (SHA-256, legacy SHA-1/MD5), services, storage/display tags |
 | `GET/POST /get_files/file_hashes` | SHA-256 to SHA-256 only |
 | `GET /health` | hydd extension: build and sync status |
+| `GET /stats` | hydd extension: `/health` superset with derived sync estimates |
 
-Every endpoint except `/api_version`, `/health`, and `/` requires an access or session key. JSON only; CBOR returns `406`. Media, thumbnail, tag-search, and mutation endpoints are not implemented. File facts the PTR does not publish (`size`, `mime`, dimensions, URLs, ratings, notes) are returned as `null` or empty. Unknown file hashes are returned as `{"file_id": null, "hash": "..."}`.
+Every endpoint except `/api_version`, `/health`, `/stats`, and `/` requires an access or session key. JSON only; CBOR returns `406`. Media, thumbnail, tag-search, and mutation endpoints are not implemented. File facts the PTR does not publish (`size`, `mime`, dimensions, URLs, ratings, notes) are returned as `null` or empty. Unknown file hashes are returned as `{"file_id": null, "hash": "..."}`.
 
 Example:
 
@@ -107,6 +108,7 @@ curl -s -X POST \
 - The PTR is a centralized Hydrus server, not peer-to-peer. It publishes SHA-256 hashes, tags, and tag relationships. A small number of very old files only have a legacy SHA-1 (or MD5) hash; hydd indexes and preserves those too, and `file_metadata` accepts 40- and 32-character hexadecimal hashes in addition to 64-character SHA-256.
 - If an update contains a serialisable version, definition/content type, action, or metadata version this build does not understand, hydd aborts the sync pass with an error and leaves the existing store untouched instead of silently dropping rows. File-add records are the only known no-op, since they carry no tag data.
 - The PTR contains exactly four hash-table values that are not valid SHA-256/SHA-1/MD5 hashes and can never be queried. Those four are skipped and reported as expected, matching what the official Hydrus client does (it stores them as opaque blobs and never resolves them). Any other invalid value still aborts the sync.
+- `/health` and `/stats` are hydd extensions and are unauthenticated, like `/api_version`. They expose aggregate counts and sync timing only - no keys, hashes, or tags. `hydd --stats` renders the same data as a human-readable page and does not need root or data-directory access. Keep `listen_address = 127.0.0.1` unless you accept publishing those counts.
 - `hydd --scan-updates` re-parses every cached update file, verifies its sha256 against the cache filename, and reports all format failures at once. Run it after a large download and before a long build, or after a Hydrus update.
 - Hydrus uses SQLite, but a Hydrus client database is split across several files with a client-specific schema. The SQLite backend here is a simpler mirror schema, not a byte-compatible Hydrus client database. PostgreSQL is not implemented.
 - At the time of writing the PTR has about 3.9 billion mappings, 206 million file hashes, and 55 million tags. A full sync downloads roughly 7-8 GB of update files; keep extra free space for temporary files.

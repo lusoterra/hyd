@@ -1498,6 +1498,7 @@ bool load_sync_state(const std::filesystem::path& path, SyncState& state, std::s
         state.built_at = root.value("built_at", static_cast<std::int64_t>(0));
         state.last_sync_at = root.value("last_sync_at", static_cast<std::int64_t>(0));
         state.last_sync_started = root.value("last_sync_started", static_cast<std::int64_t>(0));
+        state.next_update_due = root.value("next_update_due", static_cast<std::int64_t>(0));
         state.downloaded_bytes = root.value("downloaded_bytes", static_cast<std::uint64_t>(0));
         state.downloaded_files = root.value("downloaded_files", static_cast<std::uint64_t>(0));
         state.delta_generation = root.value("delta_generation", 0u);
@@ -1524,6 +1525,7 @@ bool save_sync_state(const std::filesystem::path& path, const SyncState& state, 
     root["built_at"] = state.built_at;
     root["last_sync_at"] = state.last_sync_at;
     root["last_sync_started"] = state.last_sync_started;
+    root["next_update_due"] = state.next_update_due;
     root["downloaded_bytes"] = state.downloaded_bytes;
     root["downloaded_files"] = state.downloaded_files;
     root["delta_generation"] = state.delta_generation;
@@ -1674,6 +1676,7 @@ bool sync_repository(const Config& config, const SyncCallbacks& callbacks, bool&
     }
 
     metadata.merge(fresh);
+    state.next_update_due = metadata.next_update_due;
     if (!save_repository_metadata_file(metadata_path, metadata, error))
     {
         return false;

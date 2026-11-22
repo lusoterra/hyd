@@ -19,13 +19,15 @@ namespace hyd {
 class ApiHandlers
 {
 public:
-    ApiHandlers(Config config, std::string access_key, std::string service_key, std::string service_name);
+    ApiHandlers(Config config, std::string access_key, std::string service_key,
+        std::string service_name, std::string version);
 
     ApiResponse handle(const ApiRequest& request);
 
     void set_store(std::shared_ptr<const TagSource> store);
     void set_sync_state(const SyncState& state);
     void set_partial(bool partial) { partial_.store(partial); }
+    void set_next_check_at(std::int64_t timestamp) { next_check_at_.store(timestamp); }
 
     const std::string& access_key() const { return access_key_; }
     const std::string& service_key() const { return service_key_; }
@@ -54,6 +56,7 @@ private:
     std::string access_key_;
     std::string service_key_;
     std::string service_name_;
+    std::string version_;
     std::string boot_id_hex_;
     double boot_time_ = 0.0;
 
@@ -61,6 +64,7 @@ private:
     mutable std::mutex state_mutex_;
     SyncState sync_state_;
     std::atomic<bool> partial_ { false };
+    std::atomic<std::int64_t> next_check_at_ { 0 };
 
     mutable std::mutex sessions_mutex_;
     std::unordered_map<std::string, std::int64_t> sessions_; // key -> expiry unix

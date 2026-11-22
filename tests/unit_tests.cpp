@@ -2,6 +2,7 @@
 #include "common/util.hpp"
 #include "hydrus/repository.hpp"
 #include "hydrus/update.hpp"
+#include "stats.hpp"
 #include "store/delta.hpp"
 
 #include <filesystem>
@@ -173,6 +174,74 @@ int main()
             R"([21, 2, [[[0, "metadata_slice"], [2, [37, 2, [[], 1800000000]]]]]])",
             metadata, metadata_error));
         assert(metadata_error.find("metadata_slice has unsupported version") != std::string::npos);
+    }
+
+    {
+        // Stats rendering: current daemon shape.
+        const auto now = now_unix();
+        const nlohmann::json health = {
+            { "built", true },
+            { "store_open", true },
+            { "partial", false },
+            { "backend", "custom" },
+            { "partitions", 16 },
+            { "next_index", 4722 },
+            { "last_sync_at", now - 3600 },
+            { "next_update_due", now + 7200 },
+            { "next_check_at", now + 1800 },
+            { "estimated_update_applied_at", now + 7200 },
+            { "sync_enabled", true },
+            { "sync_interval_seconds", 3600 },
+            { "service_name", "public tag repository" },
+            { "hyd_version", "0.4.0" },
+            { "hashes", 206154409 },
+            { "sha256_hashes", 206154408 },
+            { "legacy_hashes", 1 },
+            { "tags", 54975491 },
+            { "mappings", 4181606107 },
+            { "siblings", 590965 },
+            { "parents", 41873 },
+            { "delta_records", 0 },
+            { "delta_hashes", 0 },
+        };
+
+        const auto stats = render_stats(health, nullptr, "http://127.0.0.1:45869", "fallback");
+        assert(stats.find("206.15 million (206,154,408)") != std::string::npos);
+        assert(stats.find("54.98 million (54,975,491)") != std::string::npos);
+        assert(stats.find("4.18 billion (4,181,606,107)") != std::string::npos);
+        assert(stats.find("590,965") != std::string::npos);
+        assert(stats.find("41,873") != std::string::npos);
+        assert(stats.find("ready") != std::string::npos);
+        assert(stats.find("PTR update due") != std::string::npos);
+        assert(stats.find("Next check") != std::string::npos);
+        assert(stats.find("Expected applied") != std::string::npos);
+    }
+
+    {
+        // Stats rendering: older daemon without the new health fields.
+        const nlohmann::json old_health = {
+            { "built", true },
+            { "store_open", true },
+            { "next_index", 10 },
+            { "hashes", 1000000 },
+            { "mappings", 2000000 },
+            { "tags", 3000000 },
+        };
+        const nlohmann::json api_version = { { "hyd_version", "0.3.0" } };
+
+        const auto stats = render_stats(
+            old_health, &api_version, "http://127.0.0.1:45869", "fallback");
+        assert(stats.find("1.00 million (1,000,000)") != std::string::npos);
+        assert(stats.find("0.3.0") != std::string::npos);
+        assert(stats.find("some fields are unavailable") != std::string::npos);
+        assert(stats.find("Expected applied") == std::string::npos);
+    }
+
+    {
+        // Stats rendering: an empty or mostly-unavailable daemon must not throw.
+        const auto stats = render_stats(
+            nlohmann::json::object(), nullptr, "http://127.0.0.1:45869", "fallback");
+        assert(stats.find("building initial store") != std::string::npos);
     }
 
     {

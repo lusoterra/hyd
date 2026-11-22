@@ -76,6 +76,10 @@ public:
     std::uint64_t total_hash_count() const override;
     std::uint64_t total_mapping_count() const override;
     std::uint64_t total_tag_count() const override;
+    std::uint64_t total_sibling_count() const override;
+    std::uint64_t total_parent_count() const override;
+    std::uint64_t legacy_hash_count() const override;
+    std::size_t partition_count() const override { return manifest_.partitions; }
     std::string backend_name() const override { return "custom"; }
     std::uint64_t delta_hash_count() const override;
 

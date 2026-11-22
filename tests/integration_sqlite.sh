@@ -98,6 +98,7 @@ BODY=$(curl -s -X POST -H 'Content-Type: application/json' \
     "${BASE}/get_files/file_metadata")
 echo "${BODY}" | grep -q 'character:delta'
 curl -s "${BASE}/health" | grep -q '"backend":"sqlite"'
+curl -s "${BASE}/stats" | grep -q '"legacy_hashes":2'
 
 BODY=$(curl -s -X POST -H 'Content-Type: application/json' \
     -H "Hydrus-Client-API-Access-Key: ${KEY}" \

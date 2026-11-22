@@ -19,6 +19,7 @@ struct SyncState
     std::int64_t built_at = 0;
     std::int64_t last_sync_at = 0;
     std::int64_t last_sync_started = 0;
+    std::int64_t next_update_due = 0;
     std::uint64_t downloaded_bytes = 0;
     std::uint64_t downloaded_files = 0;
     std::uint32_t delta_generation = 0;

@@ -5,6 +5,7 @@
 #include "common/util.hpp"
 #include "hydrus/http.hpp"
 #include "hydrus/update.hpp"
+#include "stats.hpp"
 #include "store/builder.hpp"
 #include "store/store.hpp"
 #include "store/sqlite_store.hpp"
@@ -59,6 +60,7 @@ struct Options
     bool query = false;
     bool verify_store = false;
     bool scan_updates = false;
+    bool stats = false;
     bool compact = false;
     bool print_access_key = false;
     std::string query_hash;
@@ -81,6 +83,7 @@ void print_help()
         "      --query HASH           Print the tags for a file hash and exit\n"
         "      --verify-store         Open and validate the store and exit\n"
         "      --scan-updates         Parse every cached update file and report format errors\n"
+        "      --stats                Query the running local API and print repository statistics\n"
         "      --compact              Merge pending deltas into the base store and exit\n"
         "      --print-access-key     Print the configured API access key and exit\n"
         "      --log-level LEVEL      trace, debug, info, warn, error, off\n"
@@ -108,6 +111,7 @@ std::optional<Options> parse_options(int argc, char** argv, std::string& error)
         { "compact", no_argument, nullptr, 1006 },
         { "log-level", required_argument, nullptr, 1005 },
         { "scan-updates", no_argument, nullptr, 1007 },
+        { "stats", no_argument, nullptr, 1008 },
         { "help", no_argument, nullptr, 'h' },
         { "version", no_argument, nullptr, 'V' },
         { nullptr, 0, nullptr, 0 },
@@ -168,6 +172,9 @@ std::optional<Options> parse_options(int argc, char** argv, std::string& error)
                 break;
             case 1007:
                 options.scan_updates = true;
+                break;
+            case 1008:
+                options.stats = true;
                 break;
             case 'h':
                 print_help();
@@ -497,6 +504,13 @@ int main(int argc, char** argv)
         return 2;
     }
 
+    if (options->stats)
+    {
+        // Statistics only need the config and the local HTTP API. Dispatch
+        // before any data-dir, key, or log-file work so it works unprivileged.
+        return hyd::run_stats(runtime.config);
+    }
+
     hyd::log_set_level(hyd::log_level_from_string(runtime.config.get_string("log_level", "info")));
 
     const auto log_file = runtime.config.get_string("log_file");
@@ -562,7 +576,7 @@ int main(int argc, char** argv)
     const std::string service_name = runtime.config.get_string("service_name", "public tag repository");
 
     runtime.handlers = std::make_shared<hyd::ApiHandlers>(
-        runtime.config, runtime.access_key, runtime.service_key, service_name);
+        runtime.config, runtime.access_key, runtime.service_key, service_name, kVersion);
 
     if (!hyd::load_sync_state(runtime.config.state_dir() / "sync.json", runtime.sync_state, error))
     {
@@ -752,6 +766,7 @@ int main(int argc, char** argv)
     {
         sync_thread = std::thread([&runtime] {
             const bool sync_on_start = runtime.config.get_bool("sync_on_start", true);
+            runtime.handlers->set_next_check_at(0);
             if (sync_on_start || !runtime.sync_state.built)
             {
                 std::string sync_error;
@@ -767,6 +782,7 @@ int main(int argc, char** argv)
             {
                 const auto interval = std::chrono::seconds(runtime.config.sync_interval_seconds());
                 const auto deadline = std::chrono::steady_clock::now() + interval;
+                runtime.handlers->set_next_check_at(hyd::now_unix() + interval.count());
                 while (!g_stop.load() && std::chrono::steady_clock::now() < deadline)
                 {
                     std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -776,6 +792,7 @@ int main(int argc, char** argv)
                     break;
                 }
 
+                runtime.handlers->set_next_check_at(0);
                 std::string sync_error;
                 bool stopped = false;
                 run_sync(runtime, stopped, sync_error);

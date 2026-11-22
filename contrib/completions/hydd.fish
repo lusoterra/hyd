@@ -8,6 +8,7 @@ complete -c hydd -l query -d 'Print tags for a file hash (SHA-256, SHA-1, or MD5
 complete -c hydd -l compact -d 'Merge pending deltas into the base store and exit'
 complete -c hydd -l verify-store -d 'Open and validate the store and exit'
 complete -c hydd -l scan-updates -d 'Parse every cached update file and report format errors'
+complete -c hydd -l stats -d 'Query the running local API and print repository statistics'
 complete -c hydd -l print-access-key -d 'Print the API access key and exit'
 complete -c hydd -l log-level -d 'Log verbosity' -r -a 'trace debug info warn error off'
 complete -c hydd -s h -l help -d 'Show help'

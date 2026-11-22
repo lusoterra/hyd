@@ -26,6 +26,7 @@ struct SqliteStore::Impl
     std::uint64_t hash_count = 0;
     std::uint64_t mapping_count = 0;
     std::uint64_t tag_count = 0;
+    std::uint64_t legacy_count = 0;
 };
 
 SqliteStore::SqliteStore()
@@ -147,6 +148,7 @@ bool SqliteStore::open(const std::filesystem::path& path, std::string& error)
                 if (key == "hash_count") impl_->hash_count = value;
                 else if (key == "mapping_count") impl_->mapping_count = value;
                 else if (key == "tag_count") impl_->tag_count = value;
+                else if (key == "legacy_count") impl_->legacy_count = value;
             }
             sqlite3_finalize(statement);
         }
@@ -285,5 +287,23 @@ TagQueryResult SqliteStore::lookup(std::span<const std::uint8_t> hash) const
 std::uint64_t SqliteStore::total_hash_count() const { return impl_->hash_count; }
 std::uint64_t SqliteStore::total_mapping_count() const { return impl_->mapping_count; }
 std::uint64_t SqliteStore::total_tag_count() const { return impl_->tag_count; }
+
+std::uint64_t SqliteStore::total_sibling_count() const
+{
+    return static_cast<std::uint64_t>(impl_->siblings.size());
+}
+
+std::uint64_t SqliteStore::total_parent_count() const
+{
+    std::uint64_t total = 0;
+    for (const auto& [child, ancestors] : impl_->parents)
+    {
+        (void)child;
+        total += ancestors.size();
+    }
+    return total;
+}
+
+std::uint64_t SqliteStore::legacy_hash_count() const { return impl_->legacy_count; }
 
 } // namespace hyd

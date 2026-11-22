@@ -265,6 +265,7 @@ public:
         hash_count_ = read_count("hash_count");
         mapping_count_ = read_count("mapping_count");
         tag_count_ = read_count("tag_count");
+        legacy_count_ = read_count("legacy_count");
         sqlite3_finalize(counter);
 
         return true;
@@ -288,6 +289,10 @@ public:
         if (sqlite3_changes(db_) > 0)
         {
             ++hash_count_;
+            if (hash.size() != kHashSize)
+            {
+                ++legacy_count_;
+            }
         }
     }
 
@@ -385,12 +390,13 @@ public:
         };
 
         return put("hash_count", hash_count_) && put("mapping_count", mapping_count_)
-            && put("tag_count", tag_count_);
+            && put("tag_count", tag_count_) && put("legacy_count", legacy_count_);
     }
 
     std::uint64_t hash_count() const { return hash_count_; }
     std::uint64_t mapping_count() const { return mapping_count_; }
     std::uint64_t tag_count() const { return tag_count_; }
+    std::uint64_t legacy_count() const { return legacy_count_; }
 
 private:
     enum Statement
@@ -424,6 +430,7 @@ private:
     std::uint64_t hash_count_ = 0;
     std::uint64_t mapping_count_ = 0;
     std::uint64_t tag_count_ = 0;
+    std::uint64_t legacy_count_ = 0;
 };
 
 class SqliteDefinitionVisitor : public UpdateVisitor
@@ -554,6 +561,7 @@ bool sync_sqlite(const Config& config, const SyncCallbacks& callbacks, bool& sto
     }
 
     metadata.merge(fresh);
+    state.next_update_due = metadata.next_update_due;
     if (!save_repository_metadata_file(metadata_path, metadata, error))
     {
         return false;

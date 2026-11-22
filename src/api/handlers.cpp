@@ -186,11 +186,13 @@ std::string method_path(const ApiRequest& request)
 
 } // namespace
 
-ApiHandlers::ApiHandlers(Config config, std::string access_key, std::string service_key, std::string service_name)
+ApiHandlers::ApiHandlers(Config config, std::string access_key, std::string service_key,
+    std::string service_name, std::string version)
     : config_(std::move(config)),
       access_key_(std::move(access_key)),
       service_key_(std::move(service_key)),
-      service_name_(std::move(service_name))
+      service_name_(std::move(service_name)),
+      version_(std::move(version))
 {
     boot_id_hex_ = hex_encode(random_bytes(32));
     const auto now = std::chrono::system_clock::now().time_since_epoch();
@@ -383,19 +385,57 @@ ApiResponse ApiHandlers::route(const ApiRequest& request)
     if (path == "/api_version")
     {
         auto body = base_response();
-        body["hyd_version"] = "0.2.0";
+        body["hyd_version"] = version_;
         return ApiResponse { 200, "application/json", dump_json(body) };
     }
 
-    if (path == "/health")
+    if (path == "/health" || path == "/stats")
     {
         auto body = base_response();
         std::lock_guard<std::mutex> lock(state_mutex_);
+        const bool sync_enabled = config_.get_bool("sync_enabled", true);
+        const std::int64_t interval = config_.sync_interval_seconds();
+        const std::int64_t now = now_unix();
+        const std::int64_t next_check = next_check_at_.load();
+
+        body["hyd_version"] = version_;
+        body["service_name"] = service_name_;
         body["built"] = sync_state_.built;
         body["partial"] = partial_.load();
         body["next_index"] = sync_state_.next_index;
+        body["next_update_due"] = sync_state_.next_update_due;
         body["last_sync_at"] = sync_state_.last_sync_at;
         body["delta_generation"] = sync_state_.delta_generation;
+        body["sync_enabled"] = sync_enabled;
+        body["sync_interval_seconds"] = interval;
+        body["next_check_at"] = next_check;
+        body["data_age_seconds"] = sync_state_.last_sync_at > 0 ? now - sync_state_.last_sync_at : 0;
+        body["update_overdue_seconds"] = sync_state_.next_update_due > 0 && now > sync_state_.next_update_due
+            ? now - sync_state_.next_update_due
+            : 0;
+
+        std::int64_t estimated_applied = 0;
+        if (sync_enabled && sync_state_.next_update_due > 0 && next_check > 0)
+        {
+            if (sync_state_.next_update_due <= next_check)
+            {
+                estimated_applied = next_check;
+            }
+            else
+            {
+                const std::int64_t polling_interval = std::max<std::int64_t>(60, interval);
+                const std::int64_t remaining = sync_state_.next_update_due - next_check;
+                const std::int64_t checks = (remaining + polling_interval - 1) / polling_interval;
+                estimated_applied = next_check + checks * polling_interval;
+            }
+
+            if (estimated_applied < now)
+            {
+                estimated_applied = now;
+            }
+        }
+        body["estimated_update_applied_at"] = estimated_applied;
+
         const auto store = store_.load();
         body["store_open"] = static_cast<bool>(store);
         body["hash_count"] = sync_state_.hash_count;
@@ -403,9 +443,21 @@ ApiResponse ApiHandlers::route(const ApiRequest& request)
         body["tag_count"] = sync_state_.tag_count;
         if (store)
         {
-            body["hashes"] = store->total_hash_count();
+            const std::uint64_t legacy_hashes = store->legacy_hash_count();
+            const std::uint64_t total_hashes = store->total_hash_count();
+            body["hashes"] = total_hashes;
             body["mappings"] = store->total_mapping_count();
             body["tags"] = store->total_tag_count();
+            body["siblings"] = store->total_sibling_count();
+            body["parents"] = store->total_parent_count();
+            body["legacy_hashes"] = legacy_hashes;
+            body["sha256_hashes"] = total_hashes >= legacy_hashes
+                ? total_hashes - legacy_hashes
+                : total_hashes;
+            if (store->partition_count() > 0)
+            {
+                body["partitions"] = store->partition_count();
+            }
             body["delta_records"] = store->delta_record_count();
             body["delta_hashes"] = store->delta_hash_count();
             body["backend"] = store->backend_name();

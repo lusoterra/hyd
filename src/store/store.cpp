@@ -762,6 +762,36 @@ std::uint64_t Store::total_tag_count() const
     return manifest_.tag_count + delta_.tags.size();
 }
 
+std::uint64_t Store::total_sibling_count() const
+{
+    return open_ ? static_cast<std::uint64_t>(impl_->siblings.size()) : 0;
+}
+
+std::uint64_t Store::total_parent_count() const
+{
+    if (!open_)
+    {
+        return 0;
+    }
+
+    std::uint64_t total = 0;
+    for (const auto& [child, ancestors] : impl_->parents)
+    {
+        (void)child;
+        total += ancestors.size();
+    }
+    return total;
+}
+
+std::uint64_t Store::legacy_hash_count() const
+{
+    if (!open_)
+    {
+        return 0;
+    }
+    return static_cast<std::uint64_t>(impl_->legacy_count) + delta_.legacy_hashes.size();
+}
+
 bool load_store_manifest(const std::filesystem::path& store_dir, StoreManifest& manifest, std::string& error)
 {
     const auto path = store_dir / "manifest.json";
