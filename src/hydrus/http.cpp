@@ -20,6 +20,13 @@ std::size_t write_callback(char* data, std::size_t size, std::size_t count, void
 {
     auto* body = static_cast<Bytes*>(userdata);
     const std::size_t total = size * count;
+    // Per-file cap: legitimate update files are a few MB compressed.
+    // Abort the transfer instead of buffering gigabytes from a bad mirror.
+    constexpr std::size_t kMaxBodyBytes = 256u * 1024u * 1024u;
+    if (body->size() + total > kMaxBodyBytes)
+    {
+        return 0;
+    }
     body->insert(body->end(),
         reinterpret_cast<std::uint8_t*>(data),
         reinterpret_cast<std::uint8_t*>(data) + total);
@@ -100,13 +107,22 @@ bool HttpClient::perform(const std::string& url, HttpResponse& response, std::st
     headers = curl_slist_append(headers, "Accept: application/octet-stream");
 
     curl_easy_setopt(handle, CURLOPT_URL, url.c_str());
+    // Only speak HTTP(S), even on redirect. Without this a compromised
+    // repository (or a malicious repository_url) could 302 to file://,
+    // ftp://, or link-local and libcurl would follow it.
+    curl_easy_setopt(handle, CURLOPT_PROTOCOLS_STR, "http,https");
+    curl_easy_setopt(handle, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
+    // Don't forward custom headers (Hydrus-Key, API key) on cross-host
+    // redirects; libcurl only strips Authorization by default.
+    curl_easy_setopt(handle, CURLOPT_HEADEROPT, CURLHEADER_SEPARATE);
     curl_easy_setopt(handle, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, write_callback);
     curl_easy_setopt(handle, CURLOPT_WRITEDATA, &response.body);
     curl_easy_setopt(handle, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(handle, CURLOPT_MAXREDIRS, 5L);
     curl_easy_setopt(handle, CURLOPT_CONNECTTIMEOUT, 30L);
-    curl_easy_setopt(handle, CURLOPT_TIMEOUT, timeout_seconds_);
+    const long timeout = timeout_seconds_ > 0 ? timeout_seconds_ : 120L;
+    curl_easy_setopt(handle, CURLOPT_TIMEOUT, timeout);
     curl_easy_setopt(handle, CURLOPT_LOW_SPEED_LIMIT, 1L);
     curl_easy_setopt(handle, CURLOPT_LOW_SPEED_TIME, 60L);
     curl_easy_setopt(handle, CURLOPT_USERAGENT, user_agent_.c_str());
@@ -130,7 +146,14 @@ bool HttpClient::perform(const std::string& url, HttpResponse& response, std::st
 
     if (result != CURLE_OK)
     {
-        error = error_buffer[0] != '\0' ? error_buffer : curl_easy_strerror(result);
+        if (result == CURLE_WRITE_ERROR)
+        {
+            error = "download exceeds the 256 MiB per-file cap; refusing it";
+        }
+        else
+        {
+            error = error_buffer[0] != '\0' ? error_buffer : curl_easy_strerror(result);
+        }
     }
     else
     {

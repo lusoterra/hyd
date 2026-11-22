@@ -812,11 +812,31 @@ bool load_store_manifest(const std::filesystem::path& store_dir, StoreManifest& 
         const auto root = nlohmann::json::parse(*bytes);
         manifest.format = root.value("format", kStoreFormatVersion);
         manifest.partitions = root.value("partitions", 16u);
+        if (manifest.partitions < 1 || manifest.partitions > 64
+            || (manifest.partitions & (manifest.partitions - 1)) != 0)
+        {
+            error = "store manifest has an invalid partition count "
+                + std::to_string(manifest.partitions);
+            return false;
+        }
         manifest.hash_count = root.value("hash_count", static_cast<std::uint64_t>(0));
         manifest.mapping_count = root.value("mapping_count", static_cast<std::uint64_t>(0));
         manifest.tag_count = root.value("tag_count", static_cast<std::uint64_t>(0));
         manifest.built_at = root.value("built_at", static_cast<std::int64_t>(0));
         manifest.tag_segments.clear();
+
+        auto valid_segment_path = [](const std::string& p, bool allow_empty) {
+            if (p.empty())
+            {
+                return allow_empty;
+            }
+            if (p.size() > 256 || p.front() == '/' || p.find("..") != std::string::npos
+                || p.find('\0') != std::string::npos)
+            {
+                return false;
+            }
+            return true;
+        };
 
         for (const auto& segment : root.at("tag_segments"))
         {
@@ -827,6 +847,13 @@ bool load_store_manifest(const std::filesystem::path& store_dir, StoreManifest& 
             info.idx_path = segment.at("idx").get<std::string>();
             info.str_path = segment.at("str").get<std::string>();
             info.ids_path = segment.value("ids", std::string());
+            if (!valid_segment_path(info.idx_path, false)
+                || !valid_segment_path(info.str_path, false)
+                || !valid_segment_path(info.ids_path, true))
+            {
+                error = "store manifest contains an unsafe tag segment path";
+                return false;
+            }
             manifest.tag_segments.push_back(std::move(info));
         }
 

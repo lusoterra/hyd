@@ -208,6 +208,22 @@ void ApiServer::accept_loop()
 
 void ApiServer::handle_connection(int socket_fd, std::string remote_address)
 {
+    const int active = active_.fetch_add(1) + 1;
+    struct Guard
+    {
+        std::atomic<int>& count_;
+        ~Guard() { count_.fetch_sub(1); }
+    } guard { active_ };
+
+    if (active > kMaxConcurrent)
+    {
+        const std::string response =
+            "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        send_all(socket_fd, response.data(), response.size());
+        ::shutdown(socket_fd, SHUT_RDWR);
+        return;
+    }
+
     struct timeval timeout {};
     timeout.tv_sec = 60;
     timeout.tv_usec = 0;

@@ -99,17 +99,21 @@ DAEMON_PID=$!
 sleep 0.8
 
 # --stats must work unprivileged and without touching the data directory.
+KEY=2222222222222222222222222222222222222222222222222222222222222222
+KEY2=3333333333333333333333333333333333333333333333333333333333333333
+BASE="http://127.0.0.1:${PORT_API}"
 STATS=$("${BIN}" -c "${WORK}/hydd.conf" -d "${WORK}/stats-no-data" --stats)
 echo "${STATS}" | grep -q 'SHA-256'
 echo "${STATS}" | grep -q 'Mappings'
 echo "${STATS}" | grep -q 'ready'
 [ ! -e "${WORK}/stats-no-data" ]
-curl -s "http://127.0.0.1:${PORT_API}/stats" | grep -q '"built":true'
-curl -s "http://127.0.0.1:${PORT_API}/stats" | grep -q '"phase":"idle"'
+# /stats requires authorization (/health stays open for Hydrus parity);
+# loopback trust is disabled by require_localhost_key=true here, so send a key.
+[ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT_API}/stats")" = "401" ]
+curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" "http://127.0.0.1:${PORT_API}/stats" | grep -q '"built":true'
+curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" "http://127.0.0.1:${PORT_API}/stats" | grep -q '"phase":"idle"'
+curl -s "http://127.0.0.1:${PORT_API}/health" | grep -q '"built":true'
 
-KEY=2222222222222222222222222222222222222222222222222222222222222222
-KEY2=3333333333333333333333333333333333333333333333333333333333333333
-BASE="http://127.0.0.1:${PORT_API}"
 VERSION=$("${BIN}" --version | awk '{print $2}' | sed 's/^v//')
 [ "$("${BIN}" --version)" = "hyd v${VERSION}" ]
 curl -s "${BASE}/api_version" | grep -q "\"hyd_version\":\"${VERSION}\""

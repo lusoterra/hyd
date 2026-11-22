@@ -539,6 +539,11 @@ std::string render_stats(const nlohmann::json& health, const nlohmann::json* api
 int run_stats(const Config& config)
 {
     const std::string api_url = local_api_url(config);
+    // Local `hyd --stats` should work with zero flags when loopback trust is
+    // on (the default), and still work when the operator sets
+    // require_localhost_key = true by trying the configured keys /
+    // HYDD_API_KEY, same as --api-query.
+    const auto keys = local_api_keys(config);
 
     int exit_code = 0;
     {
@@ -546,20 +551,51 @@ int run_stats(const Config& config)
         client.set_timeout_seconds(5);
         client.set_retries(0);
 
+        auto get_with_keys = [&](const std::string& target, HttpResponse& response,
+            std::string& error) {
+            std::vector<std::string> attempts = keys;
+            if (attempts.empty())
+            {
+                attempts.emplace_back();
+            }
+            for (std::size_t i = 0; i < attempts.size(); ++i)
+            {
+                client.set_api_access_key(attempts[i]);
+                if (client.get(target, response, error))
+                {
+                    return true;
+                }
+                const bool auth_error = error.rfind("HTTP 401", 0) == 0
+                    || error.rfind("HTTP 403", 0) == 0;
+                if (!auth_error || i + 1 >= attempts.size())
+                {
+                    return false;
+                }
+            }
+            return false;
+        };
+
         HttpResponse response;
         std::string error;
-        bool ok = client.get("/stats", response, error);
+        bool ok = get_with_keys("/stats", response, error);
         if (!ok && error.rfind("HTTP 404", 0) == 0)
         {
             // Older daemons only have /health; /stats is the richer hydd
             // extension on new ones.
-            ok = client.get("/health", response, error);
+            ok = get_with_keys("/health", response, error);
         }
 
         if (!ok)
         {
             std::cerr << "hydd: cannot reach the API at " << api_url << ": " << error << "\n";
-            std::cerr << "is hydd running? try: systemctl status hydd\n";
+            if (error.rfind("HTTP 401", 0) == 0 || error.rfind("HTTP 403", 0) == 0)
+            {
+                std::cerr << "set HYDD_API_KEY or add a key to access_key_file\n";
+            }
+            else
+            {
+                std::cerr << "is hydd running? try: systemctl status hydd\n";
+            }
             exit_code = 1;
         }
         else

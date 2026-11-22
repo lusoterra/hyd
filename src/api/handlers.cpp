@@ -453,137 +453,19 @@ ApiResponse ApiHandlers::route(const ApiRequest& request)
         return ApiResponse { 200, "application/json", dump_json(body) };
     }
 
-    if (path == "/health" || path == "/stats")
+    if (path == "/health")
     {
-        auto body = base_response();
-        std::lock_guard<std::mutex> lock(state_mutex_);
-        const bool sync_enabled = config_.get_bool("sync_enabled", true);
-        const std::int64_t interval = config_.sync_interval_seconds();
-        const std::int64_t now = now_unix();
-        const std::int64_t next_check = next_check_at_.load();
+        return ApiResponse { 200, "application/json", dump_json(health_json()) };
+    }
 
-        body["hyd_version"] = version_;
-        body["service_name"] = service_name_;
-        body["built"] = sync_state_.built;
-        body["partial"] = partial_.load();
-        body["next_index"] = sync_state_.next_index;
-        body["next_update_due"] = sync_state_.next_update_due;
-        body["last_sync_at"] = sync_state_.last_sync_at;
-        body["delta_generation"] = sync_state_.delta_generation;
-        body["sync_enabled"] = sync_enabled;
-        body["sync_interval_seconds"] = interval;
-        body["next_check_at"] = next_check;
-        body["data_age_seconds"] = sync_state_.last_sync_at > 0 ? now - sync_state_.last_sync_at : 0;
-        body["update_overdue_seconds"] = sync_state_.next_update_due > 0 && now > sync_state_.next_update_due
-            ? now - sync_state_.next_update_due
-            : 0;
-
-        std::int64_t estimated_applied = 0;
-        if (sync_enabled && sync_state_.next_update_due > 0 && next_check > 0)
+    if (path == "/stats")
+    {
+        ApiResponse failure;
+        if (!authorize(request, nlohmann::json::object(), failure))
         {
-            if (sync_state_.next_update_due <= next_check)
-            {
-                estimated_applied = next_check;
-            }
-            else
-            {
-                const std::int64_t polling_interval = std::max<std::int64_t>(60, interval);
-                const std::int64_t remaining = sync_state_.next_update_due - next_check;
-                const std::int64_t checks = (remaining + polling_interval - 1) / polling_interval;
-                estimated_applied = next_check + checks * polling_interval;
-            }
-
-            if (estimated_applied < now)
-            {
-                estimated_applied = now;
-            }
+            return failure;
         }
-        body["estimated_update_applied_at"] = estimated_applied;
-
-        if (build_progress_)
-        {
-            const auto* progress = build_progress_.get();
-            const int phase = progress->phase.load();
-            const auto started_at = progress->started_at.load();
-            const auto updated_at = progress->updated_at.load();
-            const auto files_done = progress->files_done.load();
-            const auto files_total = progress->files_total.load();
-            const auto bytes_done = progress->bytes_done.load();
-            const auto bytes_total = progress->bytes_total.load();
-            const auto phase_started_at = phase == BuildProgress::phase_partitions
-                ? progress->partition_started_at.load()
-                : started_at;
-            const auto phase_elapsed = phase_started_at > 0 && now > phase_started_at
-                ? now - phase_started_at
-                : 0;
-            const auto eta = files_done > 0 && files_total > files_done && phase_elapsed > 0
-                ? phase_elapsed * static_cast<std::int64_t>(files_total - files_done)
-                    / static_cast<std::int64_t>(files_done)
-                : 0;
-
-            nlohmann::json build;
-            build["active"] = phase != BuildProgress::phase_idle;
-            if (phase == BuildProgress::phase_definitions)
-            {
-                build["phase"] = "definitions";
-            }
-            else if (phase == BuildProgress::phase_partitions)
-            {
-                build["phase"] = "partitions";
-            }
-            else
-            {
-                build["phase"] = "idle";
-            }
-            build["partition"] = progress->partition.load();
-            build["partitions"] = progress->partitions.load();
-            build["files_done"] = files_done;
-            build["files_total"] = files_total;
-            build["bytes_done"] = bytes_done;
-            build["bytes_total"] = bytes_total;
-            build["hashes"] = progress->hashes.load();
-            build["mappings"] = progress->mappings.load();
-            build["percent"] = files_total > 0
-                ? 100.0 * static_cast<double>(files_done) / static_cast<double>(files_total)
-                : 0.0;
-            build["bytes_percent"] = bytes_total > 0
-                ? 100.0 * static_cast<double>(bytes_done) / static_cast<double>(bytes_total)
-                : 0.0;
-            build["started_at"] = started_at;
-            build["updated_at"] = updated_at;
-            build["elapsed_seconds"] = started_at > 0 && now > started_at ? now - started_at : 0;
-            build["phase_elapsed_seconds"] = phase_elapsed;
-            build["eta_seconds"] = eta;
-            body["build"] = std::move(build);
-        }
-
-        const auto store = store_.load();
-        body["store_open"] = static_cast<bool>(store);
-        body["hash_count"] = sync_state_.hash_count;
-        body["mapping_count"] = sync_state_.mapping_count;
-        body["tag_count"] = sync_state_.tag_count;
-        if (store)
-        {
-            const std::uint64_t legacy_hashes = store->legacy_hash_count();
-            const std::uint64_t total_hashes = store->total_hash_count();
-            body["hashes"] = total_hashes;
-            body["mappings"] = store->total_mapping_count();
-            body["tags"] = store->total_tag_count();
-            body["siblings"] = store->total_sibling_count();
-            body["parents"] = store->total_parent_count();
-            body["legacy_hashes"] = legacy_hashes;
-            body["sha256_hashes"] = total_hashes >= legacy_hashes
-                ? total_hashes - legacy_hashes
-                : total_hashes;
-            if (store->partition_count() > 0)
-            {
-                body["partitions"] = store->partition_count();
-            }
-            body["delta_records"] = store->delta_record_count();
-            body["delta_hashes"] = store->delta_hash_count();
-            body["backend"] = store->backend_name();
-        }
-        return ApiResponse { 200, "application/json", dump_json(body) };
+        return ApiResponse { 200, "application/json", dump_json(health_json()) };
     }
 
     if (path == "/metadata")
@@ -711,6 +593,10 @@ ApiResponse ApiHandlers::handle_file_metadata(const ApiRequest& request, const n
     if (encoded_hashes.empty())
     {
         return text_response(400, "You have to specify a hash or hashes to look up.");
+    }
+    if (encoded_hashes.size() > 1000)
+    {
+        return text_response(400, "too many hashes in one request (max 1000).");
     }
 
     const bool identifiers_only = json_param_bool(params, "only_return_identifiers", false);
@@ -880,6 +766,10 @@ ApiResponse ApiHandlers::handle_file_hashes(const ApiRequest& request, const nlo
     {
         return text_response(400, "You have to specify a hash or hashes to look up.");
     }
+    if (encoded_hashes.size() > 1000)
+    {
+        return text_response(400, "too many hashes in one request (max 1000).");
+    }
 
     nlohmann::json mapping = nlohmann::json::object();
     for (const auto& encoded : encoded_hashes)
@@ -969,15 +859,15 @@ ApiResponse ApiHandlers::handle_session_key(const ApiRequest& request)
 {
     (void)request;
     const auto key = hex_encode(random_bytes(32));
+    const auto now = now_unix();
 
     {
         std::lock_guard<std::mutex> lock(sessions_mutex_);
-        sessions_[key] = now_unix() + kSessionLifetimeSeconds;
 
         // Opportunistically drop expired sessions.
         for (auto iterator = sessions_.begin(); iterator != sessions_.end();)
         {
-            if (iterator->second < now_unix())
+            if (iterator->second < now)
             {
                 iterator = sessions_.erase(iterator);
             }
@@ -986,6 +876,15 @@ ApiResponse ApiHandlers::handle_session_key(const ApiRequest& request)
                 ++iterator;
             }
         }
+
+        const std::size_t cap =
+            kMaxSessionsPerKey * std::max<std::size_t>(1, access_keys_.size());
+        if (sessions_.size() >= cap)
+        {
+            return text_response(429, "Too many active sessions; try again later.");
+        }
+
+        sessions_[key] = now + kSessionLifetimeSeconds;
     }
 
     auto body = base_response();
@@ -1057,6 +956,139 @@ bool ApiHandlers::update_cache_healthy(const RepositoryMetadata& metadata, std::
     }
 
     return true;
+}
+
+nlohmann::json ApiHandlers::health_json() const
+{
+    auto body = base_response();
+    std::lock_guard<std::mutex> lock(state_mutex_);
+        const bool sync_enabled = config_.get_bool("sync_enabled", true);
+        const std::int64_t interval = config_.sync_interval_seconds();
+        const std::int64_t now = now_unix();
+        const std::int64_t next_check = next_check_at_.load();
+
+        body["hyd_version"] = version_;
+        body["service_name"] = service_name_;
+        body["built"] = sync_state_.built;
+        body["partial"] = partial_.load();
+        body["next_index"] = sync_state_.next_index;
+        body["next_update_due"] = sync_state_.next_update_due;
+        body["last_sync_at"] = sync_state_.last_sync_at;
+        body["delta_generation"] = sync_state_.delta_generation;
+        body["sync_enabled"] = sync_enabled;
+        body["sync_interval_seconds"] = interval;
+        body["next_check_at"] = next_check;
+        body["data_age_seconds"] = sync_state_.last_sync_at > 0 ? now - sync_state_.last_sync_at : 0;
+        body["update_overdue_seconds"] = sync_state_.next_update_due > 0 && now > sync_state_.next_update_due
+            ? now - sync_state_.next_update_due
+            : 0;
+
+        std::int64_t estimated_applied = 0;
+        if (sync_enabled && sync_state_.next_update_due > 0 && next_check > 0)
+        {
+            if (sync_state_.next_update_due <= next_check)
+            {
+                estimated_applied = next_check;
+            }
+            else
+            {
+                const std::int64_t polling_interval = std::max<std::int64_t>(60, interval);
+                const std::int64_t remaining = sync_state_.next_update_due - next_check;
+                const std::int64_t checks = (remaining + polling_interval - 1) / polling_interval;
+                estimated_applied = next_check + checks * polling_interval;
+            }
+
+            if (estimated_applied < now)
+            {
+                estimated_applied = now;
+            }
+        }
+        body["estimated_update_applied_at"] = estimated_applied;
+
+        if (build_progress_)
+        {
+            const auto* progress = build_progress_.get();
+            const int phase = progress->phase.load();
+            const auto started_at = progress->started_at.load();
+            const auto updated_at = progress->updated_at.load();
+            const auto files_done = progress->files_done.load();
+            const auto files_total = progress->files_total.load();
+            const auto bytes_done = progress->bytes_done.load();
+            const auto bytes_total = progress->bytes_total.load();
+            const auto phase_started_at = phase == BuildProgress::phase_partitions
+                ? progress->partition_started_at.load()
+                : started_at;
+            const auto phase_elapsed = phase_started_at > 0 && now > phase_started_at
+                ? now - phase_started_at
+                : 0;
+            const auto eta = files_done > 0 && files_total > files_done && phase_elapsed > 0
+                ? phase_elapsed * static_cast<std::int64_t>(files_total - files_done)
+                    / static_cast<std::int64_t>(files_done)
+                : 0;
+
+            nlohmann::json build;
+            build["active"] = phase != BuildProgress::phase_idle;
+            if (phase == BuildProgress::phase_definitions)
+            {
+                build["phase"] = "definitions";
+            }
+            else if (phase == BuildProgress::phase_partitions)
+            {
+                build["phase"] = "partitions";
+            }
+            else
+            {
+                build["phase"] = "idle";
+            }
+            build["partition"] = progress->partition.load();
+            build["partitions"] = progress->partitions.load();
+            build["files_done"] = files_done;
+            build["files_total"] = files_total;
+            build["bytes_done"] = bytes_done;
+            build["bytes_total"] = bytes_total;
+            build["hashes"] = progress->hashes.load();
+            build["mappings"] = progress->mappings.load();
+            build["percent"] = files_total > 0
+                ? 100.0 * static_cast<double>(files_done) / static_cast<double>(files_total)
+                : 0.0;
+            build["bytes_percent"] = bytes_total > 0
+                ? 100.0 * static_cast<double>(bytes_done) / static_cast<double>(bytes_total)
+                : 0.0;
+            build["started_at"] = started_at;
+            build["updated_at"] = updated_at;
+            build["elapsed_seconds"] = started_at > 0 && now > started_at ? now - started_at : 0;
+            build["phase_elapsed_seconds"] = phase_elapsed;
+            build["eta_seconds"] = eta;
+            body["build"] = std::move(build);
+        }
+
+        const auto store = store_.load();
+        body["store_open"] = static_cast<bool>(store);
+        body["hash_count"] = sync_state_.hash_count;
+        body["mapping_count"] = sync_state_.mapping_count;
+        body["tag_count"] = sync_state_.tag_count;
+        if (store)
+        {
+            const std::uint64_t legacy_hashes = store->legacy_hash_count();
+            const std::uint64_t total_hashes = store->total_hash_count();
+            body["hashes"] = total_hashes;
+            body["mappings"] = store->total_mapping_count();
+            body["tags"] = store->total_tag_count();
+            body["siblings"] = store->total_sibling_count();
+            body["parents"] = store->total_parent_count();
+            body["legacy_hashes"] = legacy_hashes;
+            body["sha256_hashes"] = total_hashes >= legacy_hashes
+                ? total_hashes - legacy_hashes
+                : total_hashes;
+            if (store->partition_count() > 0)
+            {
+                body["partitions"] = store->partition_count();
+            }
+            body["delta_records"] = store->delta_record_count();
+            body["delta_hashes"] = store->delta_hash_count();
+            body["backend"] = store->backend_name();
+        }
+        return body;
 }
 
 ApiResponse ApiHandlers::handle_repository_metadata(const ApiRequest& request)

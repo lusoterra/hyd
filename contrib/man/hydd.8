@@ -1,4 +1,4 @@
-.TH HYDD 8 "2026-11-22" "hydd 0.7.0" "System Administration"
+.TH HYDD 8 "2026-11-22" "hydd 0.7.1" "System Administration"
 .SH NAME
 hydd \- read-only Hydrus Public Tag Repository mirror daemon
 .SH SYNOPSIS
@@ -172,16 +172,28 @@ GET  /update              (repository relay, keep_update_cache)
 .fi
 .PP
 Every endpoint except
-.IR / ", " /api_version ", " /health ", " /stats
+.IR / ", " /api_version ", " /health
 requires the
 .B Hydrus-Client-API-Access-Key
 header, the
 .B Hydrus-Client-API-Session-Key
 header, or the same parameter in the query string or JSON body. Missing keys
-return 401, invalid keys 403, and expired session keys 419. Loopback TCP peers
-skip the key check by default, including when they send a bogus key. Set
+return 401, invalid keys 403, expired session keys 419, and a full session
+table 429. Loopback TCP peers skip the key check by default, including when
+they send a bogus key, so local
+.B hyd --stats
+and
+.B hyd --api-query
+work with no flags. Set
 .B require_localhost_key
-to require a valid key from localhost as well.
+to require a valid key from localhost as well; the local helpers then try
+.B HYDD_API_KEY
+and the configured keys automatically.
+.B /health
+stays unauthenticated for Hydrus parity;
+.B /stats
+(the richer hydd superset) requires authorization.
+At most 32 live sessions are minted per configured access key.
 .PP
 .B /metadata
 and

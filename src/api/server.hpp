@@ -47,6 +47,8 @@ private:
     int listen_fd_ = -1;
     std::atomic<bool> running_ { false };
     std::thread accept_thread_;
+    std::atomic<int> active_ { 0 };
+    static constexpr int kMaxConcurrent = 128;
 };
 
 } // namespace hyd

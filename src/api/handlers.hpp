@@ -66,6 +66,10 @@ private:
         bool identifiers_only, bool basic_only, bool include_notes, bool detailed_urls) const;
 
     nlohmann::json base_response() const;
+    // Shared /health and /stats payload. /health stays unauthenticated for
+    // Hydrus parity; /stats requires authorization (loopback still passes by
+    // default, so local `hyd --stats` keeps working).
+    nlohmann::json health_json() const;
 
     Config config_;
     std::vector<std::string> access_keys_;
@@ -88,6 +92,10 @@ private:
 
     mutable std::mutex sessions_mutex_;
     std::unordered_map<std::string, std::int64_t> sessions_; // key -> expiry unix
+    // DoS bound: at most kMaxSessionsPerKey live sessions per configured
+    // access key (loopback-bypass mints share one bucket). New mints beyond
+    // the cap fail with 429 instead of growing the map forever.
+    static constexpr std::size_t kMaxSessionsPerKey = 32;
 };
 
 } // namespace hyd

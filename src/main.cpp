@@ -629,10 +629,13 @@ int main(int argc, char** argv)
 
     const bool inspection_only = options->query || options->verify_store;
 
+    // Held open for the rest of the process lifetime: closing the fd would
+    // release the flock. Must live outside the block scope below.
+    int lock_fd = -1;
     if (!inspection_only)
     {
         const auto lock_path = runtime.config.data_dir() / "hyd.lock";
-        const int lock_fd = ::open(lock_path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0644);
+        lock_fd = ::open(lock_path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0644);
         if (lock_fd < 0)
         {
             HYD_LOGF(error, "cannot open lock file %s: %s", lock_path.string().c_str(),
@@ -642,9 +645,10 @@ int main(int argc, char** argv)
         if (::flock(lock_fd, LOCK_EX | LOCK_NB) != 0)
         {
             HYD_LOGF(error, "another hydd process is using %s", runtime.config.data_dir().string().c_str());
+            ::close(lock_fd);
             return 1;
         }
-        // Intentionally keep lock_fd open for the lifetime of the process.
+        // lock_fd intentionally leaks to process exit so the flock is held.
 
         if (!hyd::validate_storage_backend(runtime.config, runtime.sync_state, error))
         {

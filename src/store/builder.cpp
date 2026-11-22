@@ -1963,7 +1963,27 @@ bool apply_incremental(const Config& config, const std::vector<UpdateSource>& so
     }
 
     DeltaWriter writer;
-    if (!writer.open(store_dir / "delta", state.delta_generation + 1, error))
+    // Never truncate an existing delta file: a crash between rename and
+    // sync.json save can leave d-(gen+1) on disk while state still says gen.
+    // Reusing the name would silently replace that batch. Pick the first free
+    // generation instead; replaying both batches stays idempotent.
+    std::uint32_t generation = state.delta_generation + 1;
+    for (;;)
+    {
+        char probe[64];
+        std::snprintf(probe, sizeof(probe), "d-%010u.bin", generation);
+        if (!path_exists(store_dir / "delta" / probe))
+        {
+            break;
+        }
+        if (generation == 0xffffffffu)
+        {
+            error = "delta generation counter exhausted";
+            return false;
+        }
+        ++generation;
+    }
+    if (!writer.open(store_dir / "delta", generation, error))
     {
         return false;
     }
@@ -2072,9 +2092,9 @@ bool apply_incremental(const Config& config, const std::vector<UpdateSource>& so
     }
 
     HYD_LOGF(info, "applied %llu rows into delta generation %u",
-        static_cast<unsigned long long>(delta_visitor.rows()), state.delta_generation + 1);
+        static_cast<unsigned long long>(delta_visitor.rows()), generation);
 
-    ++state.delta_generation;
+    state.delta_generation = generation;
     (void)partitions;
     return true;
 }
@@ -2685,6 +2705,11 @@ bool compact_store(const Config& config, const SyncCallbacks& callbacks, SyncSta
     bool truncated = false;
     if (!load_deltas(store_dir / "delta", partitions, delta, truncated, error))
     {
+        return false;
+    }
+    if (truncated)
+    {
+        error = "delta journal has a truncated tail; refusing to compact to avoid data loss";
         return false;
     }
     if (delta.record_count == 0)

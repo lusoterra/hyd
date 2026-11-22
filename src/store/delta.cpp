@@ -194,12 +194,13 @@ bool load_deltas(const std::filesystem::path& directory, std::size_t partitions,
 
         std::size_t offset = 0;
         const std::size_t size = bytes->size();
+        bool file_truncated = false;
 
         while (offset < size)
         {
             if (size - offset < 9)
             {
-                truncated = true;
+                file_truncated = true;
                 break;
             }
 
@@ -207,7 +208,7 @@ bool load_deltas(const std::filesystem::path& directory, std::size_t partitions,
             const std::uint32_t length = read_u32(bytes->data() + offset + 1);
             if (length > size - offset - 9)
             {
-                truncated = true;
+                file_truncated = true;
                 break;
             }
 
@@ -218,7 +219,7 @@ bool load_deltas(const std::filesystem::path& directory, std::size_t partitions,
 
             if (crc != actual_crc)
             {
-                truncated = true;
+                file_truncated = true;
                 break;
             }
 
@@ -397,10 +398,15 @@ bool load_deltas(const std::filesystem::path& directory, std::size_t partitions,
             ++data.record_count;
         }
 
-        if (truncated)
+        if (file_truncated)
         {
-            HYD_LOGF(warn, "delta file %s has a truncated tail; ignoring the remainder", path.string().c_str());
-            break;
+            HYD_LOGF(warn, "delta file %s has a truncated tail; ignoring its remainder and continuing",
+                path.string().c_str());
+            // Do not break the outer file loop: later generations are still
+            // valid and must not be silently dropped (compaction used to
+            // merge the prefix and then delete everything).
+            truncated = true;
+            continue;
         }
     }
 

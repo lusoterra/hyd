@@ -217,6 +217,11 @@ bool zlib_inflate(std::span<const std::uint8_t> input, Bytes& output, std::strin
 {
     output.clear();
 
+    // Zip-bomb guard: the largest legitimate update files decompress to tens
+    // of MB. Refuse anything beyond 512 MiB instead of OOMing on a malicious
+    // mirror.
+    constexpr std::size_t kMaxInflatedBytes = 512u * 1024u * 1024u;
+
     z_stream stream {};
     if (inflateInit(&stream) != Z_OK)
     {
@@ -251,6 +256,12 @@ bool zlib_inflate(std::span<const std::uint8_t> input, Bytes& output, std::strin
         }
 
         const std::size_t produced = buffer.size() - stream.avail_out;
+        if (output.size() + produced > kMaxInflatedBytes)
+        {
+            error = "inflated output exceeds 512 MiB; refusing a likely zip-bomb";
+            inflateEnd(&stream);
+            return false;
+        }
         output.insert(output.end(), buffer.data(), buffer.data() + produced);
 
         if (result != Z_STREAM_END && stream.avail_in == 0 && produced == 0)
@@ -362,15 +373,35 @@ bool write_file_atomic(const std::filesystem::path& path, std::span<const std::u
         }
     }
 
-    const auto temporary = path.string() + ".tmp." + std::to_string(::getpid());
-
+    // Unique, unpredictable tmp name per call: pid + 64-bit randomness.
+    // O_EXCL|O_NOFOLLOW closes the symlink-plant + cross-thread collide
+    // window of the old `path.tmp.<pid>` scheme. Retry on EEXIST.
+    std::string temporary;
+    int fd = -1;
+    for (int attempt = 0; attempt < 8; ++attempt)
     {
-        const int fd = ::open(temporary.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
-        if (fd < 0)
+        const auto nonce = hex_encode(random_bytes(8));
+        temporary = path.string() + ".tmp." + std::to_string(::getpid()) + "." + nonce;
+        fd = ::open(temporary.c_str(),
+            O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644);
+        if (fd >= 0)
+        {
+            break;
+        }
+        if (errno != EEXIST)
         {
             error = "cannot create " + temporary + ": " + errno_string(errno);
             return false;
         }
+    }
+    if (fd < 0)
+    {
+        error = "cannot create temp file for " + path.string() + ": " + errno_string(EEXIST);
+        return false;
+    }
+
+    {
+        // fd already open with O_EXCL|O_NOFOLLOW above.
 
         std::size_t offset = 0;
         while (offset < data.size())
