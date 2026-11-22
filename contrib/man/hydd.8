@@ -56,6 +56,10 @@ it runs SQLite VACUUM. This never discards live tags or mappings.
 .B \-\-verify\-store
 Open and validate the store, print its counts, and exit.
 .TP
+.B \-\-scan\-updates
+Parse every cached update file with the current importer, report any file
+that would make the sync fail, and exit. Useful before a long initial build.
+.TP
 .B \-\-print\-access\-key
 Print the API access key and exit.
 .TP

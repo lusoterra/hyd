@@ -4,6 +4,7 @@
 #include "common/log.hpp"
 #include "common/util.hpp"
 #include "hydrus/http.hpp"
+#include "hydrus/update.hpp"
 #include "store/builder.hpp"
 #include "store/store.hpp"
 #include "store/sqlite_store.hpp"
@@ -16,14 +17,17 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <iostream>
 #include <mutex>
 #include <optional>
 #include <memory>
 #include <thread>
+#include <vector>
 #include <sys/stat.h>
 
 namespace {
@@ -50,6 +54,7 @@ struct Options
     bool no_sync = false;
     bool query = false;
     bool verify_store = false;
+    bool scan_updates = false;
     bool compact = false;
     bool print_access_key = false;
     std::string query_hash;
@@ -69,8 +74,9 @@ void print_help()
         "  -p, --port PORT            Override listen_port\n"
         "      --no-sync              Serve the existing store, do not sync\n"
         "      --sync-once            Run one sync pass and exit\n"
-        "      --query HASH           Print the tags for a SHA-256 and exit\n"
+        "      --query HASH           Print the tags for a file hash and exit\n"
         "      --verify-store         Open and validate the store and exit\n"
+        "      --scan-updates         Parse every cached update file and report format errors\n"
         "      --compact              Merge pending deltas into the base store and exit\n"
         "      --print-access-key     Print the configured API access key and exit\n"
         "      --log-level LEVEL      trace, debug, info, warn, error, off\n"
@@ -97,6 +103,7 @@ std::optional<Options> parse_options(int argc, char** argv, std::string& error)
         { "print-access-key", no_argument, nullptr, 1004 },
         { "compact", no_argument, nullptr, 1006 },
         { "log-level", required_argument, nullptr, 1005 },
+        { "scan-updates", no_argument, nullptr, 1007 },
         { "help", no_argument, nullptr, 'h' },
         { "version", no_argument, nullptr, 'V' },
         { nullptr, 0, nullptr, 0 },
@@ -155,6 +162,9 @@ std::optional<Options> parse_options(int argc, char** argv, std::string& error)
             case 1005:
                 options.log_level = std::string(optarg);
                 break;
+            case 1007:
+                options.scan_updates = true;
+                break;
             case 'h':
                 print_help();
                 exit(0);
@@ -203,6 +213,168 @@ bool read_or_create_secret(const std::filesystem::path& path, std::string& value
     }
 
     return true;
+}
+
+struct ScanVisitor : hyd::UpdateVisitor
+{
+    std::uint64_t hashes = 0;
+    std::uint64_t legacy_hashes = 0;
+    std::uint64_t tags = 0;
+    std::uint64_t mappings = 0;
+    std::uint64_t files = 0;
+    std::uint64_t siblings = 0;
+    std::uint64_t parents = 0;
+
+    void on_hash_definition(std::uint32_t, const hyd::Hash&) override { ++hashes; }
+    void on_unsupported_hash_definition(std::uint32_t, std::string_view) override { ++legacy_hashes; }
+    void on_tag_definition(std::uint32_t, std::string_view) override { ++tags; }
+    void on_mapping_add(std::uint32_t, std::uint32_t) override { ++mappings; }
+    void on_mapping_delete(std::uint32_t, std::uint32_t) override { ++mappings; }
+    void on_file_add(std::uint32_t) override { ++files; }
+    void on_file_delete(std::uint32_t) override { ++files; }
+    void on_sibling_add(std::uint32_t, std::uint32_t) override { ++siblings; }
+    void on_sibling_delete(std::uint32_t, std::uint32_t) override { ++siblings; }
+    void on_parent_add(std::uint32_t, std::uint32_t) override { ++parents; }
+    void on_parent_delete(std::uint32_t, std::uint32_t) override { ++parents; }
+};
+
+int scan_update_cache(const hyd::Config& config)
+{
+    const auto directory = config.cache_dir() / "updates";
+
+    std::vector<std::filesystem::path> paths;
+    std::error_code ec;
+    if (std::filesystem::exists(directory, ec))
+    {
+        for (const auto& entry : std::filesystem::directory_iterator(directory, ec))
+        {
+            if (entry.is_regular_file() && entry.path().extension() == ".bin")
+            {
+                paths.push_back(entry.path());
+            }
+        }
+    }
+    std::sort(paths.begin(), paths.end());
+
+    if (paths.empty())
+    {
+        std::cerr << "hydd: no cached update files in " << directory << "\n";
+        return 1;
+    }
+
+    const unsigned hardware = std::thread::hardware_concurrency();
+    const unsigned workers = std::max(1u, std::min(8u, hardware == 0 ? 1u : hardware));
+
+    std::atomic<std::size_t> next { 0 };
+    std::atomic<std::uint64_t> scanned { 0 };
+    std::atomic<std::uint64_t> definitions { 0 };
+    std::atomic<std::uint64_t> content { 0 };
+    std::atomic<std::uint64_t> hashes { 0 };
+    std::atomic<std::uint64_t> legacy_hashes { 0 };
+    std::atomic<std::uint64_t> tags { 0 };
+    std::atomic<std::uint64_t> mappings { 0 };
+    std::atomic<std::uint64_t> files { 0 };
+    std::atomic<std::uint64_t> siblings { 0 };
+    std::atomic<std::uint64_t> parents { 0 };
+
+    std::mutex output_mutex;
+    std::vector<std::string> failures;
+
+    auto worker = [&] {
+        hyd::UpdateParser parser;
+        while (true)
+        {
+            const auto index = next.fetch_add(1);
+            if (index >= paths.size())
+            {
+                break;
+            }
+
+            std::string error;
+            auto bytes = hyd::read_file(paths[index], error);
+            hyd::UpdateKind kind = hyd::UpdateKind::unknown;
+            ScanVisitor visitor;
+
+            bool ok = bytes.has_value();
+            if (ok)
+            {
+                const auto expected = hyd::hash_from_hex(paths[index].stem().string());
+                if (!expected)
+                {
+                    error = "cache filename is not a sha256";
+                    ok = false;
+                }
+                else if (hyd::sha256(*bytes) != *expected)
+                {
+                    error = "sha256 does not match the cache filename";
+                    ok = false;
+                }
+            }
+
+            if (ok && parser.parse(*bytes, visitor, kind, error))
+            {
+                if (kind == hyd::UpdateKind::definitions)
+                {
+                    definitions.fetch_add(1);
+                }
+                else if (kind == hyd::UpdateKind::content)
+                {
+                    content.fetch_add(1);
+                }
+                hashes += visitor.hashes;
+                legacy_hashes += visitor.legacy_hashes;
+                tags += visitor.tags;
+                mappings += visitor.mappings;
+                files += visitor.files;
+                siblings += visitor.siblings;
+                parents += visitor.parents;
+            }
+            else
+            {
+                std::lock_guard<std::mutex> lock(output_mutex);
+                failures.push_back(paths[index].filename().string() + ": " + error);
+            }
+
+            const auto count = scanned.fetch_add(1) + 1;
+            if (count % 2000 == 0)
+            {
+                std::lock_guard<std::mutex> lock(output_mutex);
+                std::cout << "scanned " << count << "/" << paths.size() << " update files\n";
+                std::cout.flush();
+            }
+        }
+    };
+
+    std::vector<std::thread> threads;
+    threads.reserve(workers);
+    for (unsigned i = 0; i < workers; ++i)
+    {
+        threads.emplace_back(worker);
+    }
+    for (auto& thread : threads)
+    {
+        thread.join();
+    }
+
+    std::cout << "scanned " << scanned.load() << " update files: " << definitions.load()
+              << " definitions, " << content.load() << " content, " << hashes.load()
+              << " sha256 hashes, " << legacy_hashes.load() << " legacy hashes, " << tags.load()
+              << " tags, " << mappings.load() << " mappings, " << files.load() << " file records, "
+              << siblings.load() << " sibling records, " << parents.load() << " parent records\n";
+
+    if (!failures.empty())
+    {
+        std::sort(failures.begin(), failures.end());
+        for (const auto& failure : failures)
+        {
+            std::cout << "FAIL " << failure << "\n";
+        }
+        std::cerr << "hydd: " << failures.size() << " update files failed to parse\n";
+        return 1;
+    }
+
+    std::cout << "no update format problems found\n";
+    return 0;
 }
 
 struct Runtime
@@ -365,6 +537,11 @@ int main(int argc, char** argv)
     {
         std::cout << runtime.access_key << "\n";
         return 0;
+    }
+
+    if (options->scan_updates)
+    {
+        return scan_update_cache(runtime.config);
     }
 
     const std::string service_name = runtime.config.get_string("service_name", "public tag repository");

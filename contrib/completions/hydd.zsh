@@ -10,6 +10,7 @@ _arguments -s -S \
     '--query[print tags for a file hash (SHA-256, SHA-1, or MD5) and exit]:hash:' \
     '--compact[merge pending deltas into the base store and exit]' \
     '--verify-store[open and validate the store and exit]' \
+    '--scan-updates[parse every cached update file and report format errors]' \
     '--print-access-key[print the API access key and exit]' \
     '--log-level[log verbosity]:level:(trace debug info warn error off)' \
     '(-h --help)'{-h,--help}'[show help]' \

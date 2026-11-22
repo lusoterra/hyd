@@ -40,6 +40,7 @@ access_key = 2222222222222222222222222222222222222222222222222222222222222222
 service_name = integration ptr
 partitions = 4
 sync_interval_seconds = 3600
+keep_update_cache = true
 log_level = warn
 EOF
 
@@ -57,6 +58,7 @@ stop_repo() {
 
 start_repo initial
 "${BIN}" -c "${WORK}/hydd.conf" --sync-once
+"${BIN}" -c "${WORK}/hydd.conf" --scan-updates | grep -q 'no update format problems found'
 
 OUT=$("${BIN}" -c "${WORK}/hydd.conf" --query "${H1}")
 echo "${OUT}" | grep -q 'series:alpha'
@@ -158,5 +160,14 @@ echo "${OUT}" | grep -q 'series:alpha'
 
 OUT=$("${BIN}" -c "${WORK}/hydd.conf" --query "${L2}")
 echo "${OUT}" | grep -q 'creator:gamma'
+
+# The scan command must catch a corrupt cached update file.
+CACHE_FILE=$(find "${WORK}/data/cache/updates" -name '*.bin' | head -n 1)
+printf 'not zlib' > "${CACHE_FILE}"
+if SCAN_OUT=$("${BIN}" -c "${WORK}/hydd.conf" --scan-updates 2>&1); then
+    echo "scan of a corrupt update should have failed" >&2
+    exit 1
+fi
+echo "${SCAN_OUT}" | grep -q 'FAIL '
 
 echo "integration test passed"

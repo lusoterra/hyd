@@ -106,6 +106,7 @@ curl -s -X POST \
 
 - The PTR is a centralized Hydrus server, not peer-to-peer. It publishes SHA-256 hashes, tags, and tag relationships. A small number of very old files only have a legacy SHA-1 (or MD5) hash; hydd indexes and preserves those too, and `file_metadata` accepts 40- and 32-character hexadecimal hashes in addition to 64-character SHA-256.
 - If an update contains a serialisable version, definition/content type, action, hash length, or metadata version this build does not understand, hydd aborts the sync pass with an error and leaves the existing store untouched instead of silently dropping rows. File-add records are the only known no-op, since they carry no tag data.
+- `hydd --scan-updates` re-parses every cached update file, verifies its sha256 against the cache filename, and reports all format failures at once. Run it after a large download and before a long build, or after a Hydrus update.
 - Hydrus uses SQLite, but a Hydrus client database is split across several files with a client-specific schema. The SQLite backend here is a simpler mirror schema, not a byte-compatible Hydrus client database. PostgreSQL is not implemented.
 - At the time of writing the PTR has about 3.9 billion mappings, 206 million file hashes, and 55 million tags. A full sync downloads roughly 7-8 GB of update files; keep extra free space for temporary files.
 - The first custom-store build is CPU and I/O heavy because it replays every update file once for definitions and once per partition for mappings. Incremental syncs are small.
