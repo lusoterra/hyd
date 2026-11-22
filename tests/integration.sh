@@ -123,6 +123,31 @@ echo "${KEYS}" | grep -q "${KEY2}"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" "${BASE}/get_services")" = "200" ]
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY2}" "${BASE}/get_services")" = "200" ]
 
+# Repository relay: metadata and exact update files, with keep_update_cache.
+[ "$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/metadata?since=0")" = "401" ]
+curl -s -H "Hydrus-Key: ${KEY}" "${BASE}/metadata?since=0" -o "${WORK}/metadata.bin"
+python3 - "${WORK}/metadata.bin" <<'PY'
+import json
+import sys
+import zlib
+
+doc = json.loads(zlib.decompress(open(sys.argv[1], 'rb').read()))
+assert doc[0] == 21 and doc[1] == 2
+arg = doc[2][0]
+assert arg[0] == [0, 'metadata_slice']
+value = arg[1][1]
+assert value[0] == 37 and value[1] == 1
+rows, due = value[2]
+assert rows and due > 0
+assert all(len(row) == 4 for row in rows)
+PY
+
+UPDATE_FILE=$(find "${WORK}/data/cache/updates" -name '*.bin' | head -n 1)
+UPDATE_HASH=$(basename "${UPDATE_FILE}" .bin)
+curl -s -H "Hydrus-Key: ${KEY}" \
+    "${BASE}/update?update_hash=${UPDATE_HASH}" -o "${WORK}/update.bin"
+[ "$(sha256sum "${WORK}/update.bin" | awk '{print $1}')" = "${UPDATE_HASH}" ]
+
 # API-backed query and the hyd helper must work without a daemon data dir.
 OUT=$("${BIN}" -c "${WORK}/hydd.conf" -d "${WORK}/api-query-no-data" --api-query "${H1}")
 echo "${OUT}" | grep -q 'series:alpha'
@@ -195,6 +220,20 @@ if STATS_OUT=$("${BIN}" -c "${WORK}/hydd.conf" --stats 2>&1); then
     exit 1
 fi
 echo "${STATS_OUT}" | grep -q 'cannot reach the API'
+
+# The relay is disabled without keep_update_cache, even when the cache exists.
+NORELAY_PORT=$((PORT_API + 10))
+sed -e "s/^listen_port = .*/listen_port = ${NORELAY_PORT}/" \
+    -e "s/^keep_update_cache = .*/keep_update_cache = false/" \
+    "${WORK}/hydd.conf" > "${WORK}/hydd-norelay.conf"
+"${BIN}" -c "${WORK}/hydd-norelay.conf" --no-sync > "${WORK}/norelay-daemon.log" 2>&1 &
+DAEMON_PID=$!
+sleep 0.8
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Key: ${KEY}" \
+    "http://127.0.0.1:${NORELAY_PORT}/metadata?since=0")" = "404" ]
+kill "${DAEMON_PID}" 2>/dev/null || true
+wait "${DAEMON_PID}" 2>/dev/null || true
+DAEMON_PID=
 
 # Loopback is trusted by default: no key and even a bogus key are accepted.
 # The main test config sets require_localhost_key = true, so use a clone.

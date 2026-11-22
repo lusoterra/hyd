@@ -267,6 +267,13 @@ nlohmann::json ApiHandlers::services_list() const
 
 std::string ApiHandlers::access_key_from(const ApiRequest& request, const nlohmann::json& params) const
 {
+    // Repository clients send Hydrus-Key. Accept it for the Client API too.
+    const auto repository_header = request.headers.find("hydrus-key");
+    if (repository_header != request.headers.end())
+    {
+        return repository_header->second;
+    }
+
     const auto access_header = request.headers.find("hydrus-client-api-access-key");
     if (access_header != request.headers.end())
     {
@@ -539,6 +546,16 @@ ApiResponse ApiHandlers::route(const ApiRequest& request)
             body["backend"] = store->backend_name();
         }
         return ApiResponse { 200, "application/json", dump_json(body) };
+    }
+
+    if (path == "/metadata")
+    {
+        return handle_repository_metadata(request);
+    }
+
+    if (path == "/update")
+    {
+        return handle_repository_update(request);
     }
 
     nlohmann::json params;
@@ -955,6 +972,192 @@ ApiResponse ApiHandlers::handle_client_info() const
     body["boot_time"] = boot_time_;
     body["currently_idle"] = true;
     return ApiResponse { 200, "application/json", dump_json(body) };
+}
+
+bool ApiHandlers::update_cache_healthy(const RepositoryMetadata& metadata, std::string& error) const
+{
+    const auto directory = config_.cache_dir() / "updates";
+    if (!path_exists(directory))
+    {
+        error = "update cache directory is missing: " + directory.string();
+        return false;
+    }
+
+    std::uint64_t total = 0;
+    std::uint64_t missing = 0;
+    std::string first_missing;
+
+    for (const auto& [index, rows] : metadata.updates)
+    {
+        (void)index;
+        for (const auto& update : rows)
+        {
+            ++total;
+            const auto path = directory / (hex_encode(update.hash) + ".bin");
+            if (!path_exists(path) || file_size_or_zero(path) == 0)
+            {
+                ++missing;
+                if (first_missing.empty())
+                {
+                    first_missing = path.string();
+                }
+            }
+        }
+    }
+
+    if (total == 0)
+    {
+        error = "repository metadata lists no update files";
+        return false;
+    }
+
+    if (missing > 0)
+    {
+        error = "update cache is incomplete: " + std::to_string(missing) + " of "
+            + std::to_string(total) + " files missing (first: " + first_missing + ")";
+        return false;
+    }
+
+    return true;
+}
+
+ApiResponse ApiHandlers::handle_repository_metadata(const ApiRequest& request)
+{
+    if (!config_.get_bool("keep_update_cache", false))
+    {
+        return text_response(404,
+            "repository relay is disabled; set keep_update_cache = true to enable it");
+    }
+
+    ApiResponse failure;
+    if (!authorize(request, nlohmann::json::object(), failure))
+    {
+        return failure;
+    }
+
+    RepositoryMetadata metadata;
+    std::string error;
+    if (!load_repository_metadata_file(config_.state_dir() / "repository.json", metadata, error))
+    {
+        return text_response(500, error);
+    }
+
+    if (!update_cache_healthy(metadata, error))
+    {
+        return text_response(503, error);
+    }
+
+    std::int64_t since = 0;
+    if (const auto iterator = request.query.find("since"); iterator != request.query.end())
+    {
+        const auto parsed = parse_i64(iterator->second);
+        if (!parsed || *parsed < 0)
+        {
+            return text_response(400, "since must be a non-negative update index");
+        }
+        since = *parsed;
+    }
+
+    nlohmann::json rows = nlohmann::json::array();
+    for (const auto& [index, updates] : metadata.updates)
+    {
+        if (index < since)
+        {
+            continue;
+        }
+
+        std::int64_t begin = 0;
+        std::int64_t end = 0;
+        if (!updates.empty())
+        {
+            begin = updates.front().begin;
+            end = updates.front().end;
+        }
+
+        nlohmann::json hashes = nlohmann::json::array();
+        for (const auto& update : updates)
+        {
+            hashes.push_back(hex_encode(update.hash));
+        }
+
+        rows.push_back(nlohmann::json::array({ index, hashes, begin, end }));
+    }
+
+    const nlohmann::json metadata_slice = nlohmann::json::array({
+        37, 1, nlohmann::json::array({ rows, metadata.next_update_due })
+    });
+    const nlohmann::json value_meta = nlohmann::json::array({ 2, metadata_slice });
+    const nlohmann::json key_meta = nlohmann::json::array({ 0, "metadata_slice" });
+    const nlohmann::json argument = nlohmann::json::array({ key_meta, value_meta });
+    const nlohmann::json payload = nlohmann::json::array({
+        21, 2, nlohmann::json::array({ argument })
+    });
+
+    const std::string text = payload.dump();
+    Bytes compressed;
+    if (!zlib_deflate(
+            std::span<const std::uint8_t>(
+                reinterpret_cast<const std::uint8_t*>(text.data()), text.size()),
+            compressed, error))
+    {
+        return text_response(500, error);
+    }
+
+    return ApiResponse {
+        200, "application/octet-stream",
+        std::string(compressed.begin(), compressed.end())
+    };
+}
+
+ApiResponse ApiHandlers::handle_repository_update(const ApiRequest& request)
+{
+    if (!config_.get_bool("keep_update_cache", false))
+    {
+        return text_response(404,
+            "repository relay is disabled; set keep_update_cache = true to enable it");
+    }
+
+    ApiResponse failure;
+    if (!authorize(request, nlohmann::json::object(), failure))
+    {
+        return failure;
+    }
+
+    const auto iterator = request.query.find("update_hash");
+    if (iterator == request.query.end())
+    {
+        return text_response(400, "update_hash is required");
+    }
+
+    const auto hash = hash_from_hex(iterator->second);
+    if (!hash)
+    {
+        return text_response(400, "update_hash must be a 64-character sha256");
+    }
+
+    const auto path = config_.cache_dir() / "updates" / (hex_encode(*hash) + ".bin");
+    if (!path_exists(path))
+    {
+        return text_response(404, "update file is not cached");
+    }
+
+    std::string error;
+    auto bytes = read_file(path, error);
+    if (!bytes)
+    {
+        return text_response(500, error);
+    }
+
+    if (sha256(*bytes) != *hash)
+    {
+        HYD_LOGF(warn, "cached update file %s does not match its name", path.string().c_str());
+        return text_response(500, "cached update file is corrupt");
+    }
+
+    return ApiResponse {
+        200, "application/octet-stream",
+        std::string(bytes->begin(), bytes->end())
+    };
 }
 
 } // namespace hyd

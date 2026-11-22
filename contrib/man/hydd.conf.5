@@ -88,6 +88,11 @@ Default 512.
 .TP
 .B keep_update_cache
 Keep downloaded update files after a successful initial build. Default false.
+Enabling it also exposes the read-only
+.B /metadata
+and
+.B /update
+relay endpoints when the cache is complete.
 .TP
 .B download_workers
 Number of parallel update-file downloads. Each worker reuses one TLS

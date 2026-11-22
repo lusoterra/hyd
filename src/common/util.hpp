@@ -38,6 +38,9 @@ Hash sha256(std::string_view text);
 // for malformed input.
 bool zlib_inflate(std::span<const std::uint8_t> input, Bytes& output, std::string& error);
 
+// zlib (RFC 1950) compression, used by the repository metadata endpoint.
+bool zlib_deflate(std::span<const std::uint8_t> input, Bytes& output, std::string& error);
+
 std::optional<Bytes> read_file(const std::filesystem::path& path, std::string& error);
 bool write_file(const std::filesystem::path& path, std::span<const std::uint8_t> data, std::string& error);
 bool write_file_atomic(const std::filesystem::path& path, std::span<const std::uint8_t> data, std::string& error);

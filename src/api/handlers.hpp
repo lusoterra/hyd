@@ -43,6 +43,10 @@ private:
     ApiResponse handle_session_key(const ApiRequest& request);
     ApiResponse handle_verify_access_key() const;
     ApiResponse handle_client_info() const;
+    ApiResponse handle_repository_metadata(const ApiRequest& request);
+    ApiResponse handle_repository_update(const ApiRequest& request);
+
+    bool update_cache_healthy(const RepositoryMetadata& metadata, std::string& error) const;
 
     bool authorize(const ApiRequest& request, const nlohmann::json& params, ApiResponse& failure);
     std::string access_key_from(const ApiRequest& request, const nlohmann::json& params) const;

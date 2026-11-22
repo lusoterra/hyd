@@ -166,6 +166,8 @@ GET  /get_files/file_metadata
 GET  /get_files/file_hashes
 GET  /health              (hydd extension)
 GET  /stats               (hydd extension: /health superset)
+GET  /metadata            (repository relay, keep_update_cache)
+GET  /update              (repository relay, keep_update_cache)
 .fi
 .PP
 Every endpoint except
@@ -179,6 +181,17 @@ return 401, invalid keys 403, and expired session keys 419. Loopback TCP peers
 skip the key check by default, including when they send a bogus key. Set
 .B require_localhost_key
 to require a valid key from localhost as well.
+.PP
+.B /metadata
+and
+.B /update
+are enabled only when
+.B keep_update_cache
+is true and the cached update set is complete. They serve the exact
+repository update stream and accept the repository
+.B Hydrus-Key
+header as well as the Client API key headers. They never accept uploads or
+petitions.
 .PP
 The server speaks JSON only. CBOR requests return 406. File and thumbnail
 endpoints return 404 because the mirror stores no files. Search and mutation

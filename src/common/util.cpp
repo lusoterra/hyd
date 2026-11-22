@@ -265,6 +265,30 @@ bool zlib_inflate(std::span<const std::uint8_t> input, Bytes& output, std::strin
     return true;
 }
 
+bool zlib_deflate(std::span<const std::uint8_t> input, Bytes& output, std::string& error)
+{
+    if (input.size() > 0xffffffffu)
+    {
+        error = "input is too large to compress";
+        return false;
+    }
+
+    uLongf output_size = compressBound(static_cast<uLong>(input.size()));
+    output.resize(output_size);
+
+    const int result = compress2(output.data(), &output_size,
+        input.data(), static_cast<uLong>(input.size()), Z_DEFAULT_COMPRESSION);
+    if (result != Z_OK)
+    {
+        output.clear();
+        error = "zlib compression failed (" + std::to_string(result) + ")";
+        return false;
+    }
+
+    output.resize(output_size);
+    return true;
+}
+
 std::optional<Bytes> read_file(const std::filesystem::path& path, std::string& error)
 {
     std::ifstream file(path, std::ios::binary);

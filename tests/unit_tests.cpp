@@ -322,6 +322,20 @@ int main()
     }
 
     {
+        // zlib round-trip used by the repository metadata relay.
+        const std::string text = "metadata relay round trip";
+        Bytes compressed;
+        Bytes inflated;
+        std::string compression_error;
+        assert(zlib_deflate(
+            std::span<const std::uint8_t>(
+                reinterpret_cast<const std::uint8_t*>(text.data()), text.size()),
+            compressed, compression_error));
+        assert(zlib_inflate(compressed, inflated, compression_error));
+        assert(std::string(inflated.begin(), inflated.end()) == text);
+    }
+
+    {
         const auto decoded = percent_decode("a%20b%2Fc+d");
         assert(decoded == "a b/c d");
     }
