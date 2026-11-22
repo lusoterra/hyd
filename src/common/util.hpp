@@ -24,6 +24,13 @@ std::optional<Hash> hash_from_hex(std::string_view text);
 // (20 bytes), or MD5 (16 bytes). Other lengths are rejected.
 std::optional<Bytes> hash_bytes_from_hex(std::string_view text);
 
+// Parses one or more API keys (64 hexadecimal characters) separated by
+// commas or whitespace. Blank entries are ignored; invalid keys are an error.
+bool parse_key_list(std::string_view text, std::vector<std::string>& keys, std::string& error);
+// Reads one API key per line from path. Blank lines and lines starting with
+// '#' are ignored. A missing file is not an error and leaves keys untouched.
+bool load_key_file(const std::filesystem::path& path, std::vector<std::string>& keys, std::string& error);
+
 Hash sha256(std::span<const std::uint8_t> bytes);
 Hash sha256(std::string_view text);
 

@@ -35,9 +35,14 @@ and
 .IR 45869 .
 .TP
 .B access_key ", " access_key_file
-API access key. If left empty, the key is read from
+API access keys. 
+.I access_key
+may contain one key or several comma-separated keys. If it is empty, keys are
+read from
 .I access_key_file
-or generated there on first start.
+one per line; blank lines and lines starting with # are ignored, and the file
+is generated with one key on first start. Prefer the file because the config
+file is world-readable.
 .TP
 .B require_localhost_key
 By default, loopback TCP peers (127.0.0.1, ::1) skip the API key check, and

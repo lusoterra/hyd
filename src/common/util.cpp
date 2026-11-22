@@ -102,6 +102,103 @@ std::optional<Bytes> hash_bytes_from_hex(std::string_view text)
     return bytes;
 }
 
+namespace {
+
+bool append_access_key(std::string key, std::vector<std::string>& keys, std::string& error)
+{
+    key = trim(key);
+    if (key.empty())
+    {
+        return true;
+    }
+
+    if (!hash_from_hex(key))
+    {
+        error = "invalid API key: it must be 64 hexadecimal characters";
+        return false;
+    }
+
+    if (std::find(keys.begin(), keys.end(), key) == keys.end())
+    {
+        keys.push_back(std::move(key));
+    }
+
+    return true;
+}
+
+} // namespace
+
+bool parse_key_list(std::string_view text, std::vector<std::string>& keys, std::string& error)
+{
+    std::string token;
+    for (const char character : text)
+    {
+        if (character == ',' || std::isspace(static_cast<unsigned char>(character)))
+        {
+            if (!append_access_key(std::move(token), keys, error))
+            {
+                return false;
+            }
+            token.clear();
+        }
+        else
+        {
+            token.push_back(character);
+        }
+    }
+
+    return append_access_key(std::move(token), keys, error);
+}
+
+bool load_key_file(const std::filesystem::path& path, std::vector<std::string>& keys, std::string& error)
+{
+    if (!path_exists(path))
+    {
+        return true;
+    }
+
+    auto bytes = read_file(path, error);
+    if (!bytes)
+    {
+        return false;
+    }
+
+    const std::string text(bytes->begin(), bytes->end());
+    std::size_t line_number = 0;
+    std::size_t start = 0;
+
+    while (start <= text.size())
+    {
+        const std::size_t end = text.find('\n', start);
+        const std::string line = text.substr(
+            start, end == std::string::npos ? std::string::npos : end - start);
+        ++line_number;
+
+        const std::string trimmed = trim(line);
+        if (!trimmed.empty() && trimmed.front() != '#')
+        {
+            if (!hash_from_hex(trimmed))
+            {
+                error = path.string() + ":" + std::to_string(line_number)
+                    + " is not a 64-character hexadecimal API key";
+                return false;
+            }
+            if (std::find(keys.begin(), keys.end(), trimmed) == keys.end())
+            {
+                keys.push_back(trimmed);
+            }
+        }
+
+        if (end == std::string::npos)
+        {
+            break;
+        }
+        start = end + 1;
+    }
+
+    return true;
+}
+
 Hash sha256(std::span<const std::uint8_t> bytes)
 {
     Hash out {};

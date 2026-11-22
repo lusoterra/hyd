@@ -193,10 +193,10 @@ std::string method_path(const ApiRequest& request)
 
 } // namespace
 
-ApiHandlers::ApiHandlers(Config config, std::string access_key, std::string service_key,
+ApiHandlers::ApiHandlers(Config config, std::vector<std::string> access_keys, std::string service_key,
     std::string service_name, std::string version)
     : config_(std::move(config)),
-      access_key_(std::move(access_key)),
+      access_keys_(std::move(access_keys)),
       service_key_(std::move(service_key)),
       service_name_(std::move(service_name)),
       version_(std::move(version))
@@ -323,7 +323,13 @@ bool ApiHandlers::authorize(const ApiRequest& request, const nlohmann::json& par
         return CRYPTO_memcmp(left.data(), right.data(), left.size()) == 0;
     };
 
-    if (constant_time_equal(provided, access_key_))
+    bool access_key_matched = false;
+    for (const auto& key : access_keys_)
+    {
+        access_key_matched |= constant_time_equal(provided, key);
+    }
+
+    if (access_key_matched)
     {
         return true;
     }

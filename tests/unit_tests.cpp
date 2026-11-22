@@ -80,6 +80,50 @@ int main()
     }
 
     {
+        // Multiple API keys: comma/whitespace separated in config, one per
+        // line in the key file, with blanks and comments ignored.
+        const std::string first(64, 'a');
+        const std::string second(64, 'b');
+
+        std::vector<std::string> keys;
+        std::string key_error;
+        assert(parse_key_list(first + "," + second, keys, key_error));
+        assert(keys.size() == 2);
+        assert(keys[0] == first && keys[1] == second);
+
+        keys.clear();
+        assert(parse_key_list(first + "\n \t" + second + "\n", keys, key_error));
+        assert(keys.size() == 2);
+
+        assert(!parse_key_list("not-a-key", keys, key_error));
+
+        const auto directory = std::filesystem::temp_directory_path()
+            / ("hyd-key-test-" + std::to_string(::getpid()));
+        std::error_code ec;
+        std::filesystem::remove_all(directory, ec);
+        std::filesystem::create_directories(directory);
+        const auto path = directory / "api_access_key";
+
+        assert(write_file_atomic(path,
+            "# primary\n" + first + "\n\n" + second + "\n", key_error));
+
+        keys.clear();
+        assert(load_key_file(path, keys, key_error));
+        assert(keys.size() == 2);
+        assert(keys[0] == first && keys[1] == second);
+
+        keys.clear();
+        assert(load_key_file(directory / "missing", keys, key_error));
+        assert(keys.empty());
+
+        assert(write_file_atomic(path, "garbage\n", key_error));
+        keys.clear();
+        assert(!load_key_file(path, keys, key_error));
+
+        std::filesystem::remove_all(directory, ec);
+    }
+
+    {
         // Unknown types, versions, actions, and shapes must abort the parse
         // rather than silently dropping rows.
         auto compressed = [](std::string_view text) {

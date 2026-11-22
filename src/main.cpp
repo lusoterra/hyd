@@ -87,7 +87,7 @@ void print_help()
         "      --scan-updates         Parse every cached update file and report format errors\n"
         "      --stats                Query the running local API and print repository statistics\n"
         "      --compact              Merge pending deltas into the base store and exit\n"
-        "      --print-access-key     Print the configured API access key and exit\n"
+        "      --print-access-key     Print every configured API access key and exit\n"
         "      --log-level LEVEL      trace, debug, info, warn, error, off\n"
         "  -h, --help                 Show this help\n"
         "  -V, --version              Show the version\n"
@@ -409,7 +409,7 @@ int scan_update_cache(const hyd::Config& config)
 struct Runtime
 {
     hyd::Config config;
-    std::string access_key;
+    std::vector<std::string> access_keys;
     std::string service_key;
     std::shared_ptr<hyd::ApiHandlers> handlers;
     std::shared_ptr<const hyd::TagSource> store;
@@ -550,18 +550,53 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    std::string access_key = runtime.config.get_string("access_key");
-    if (access_key.empty())
+    std::vector<std::string> access_keys;
+    const std::string configured_access_key = runtime.config.get_string("access_key");
+    if (!configured_access_key.empty())
     {
-        const auto access_key_file = runtime.config.get_string(
-            "access_key_file", (runtime.config.data_dir() / "api_access_key").string());
-        if (!read_or_create_secret(access_key_file, access_key, error))
+        if (!hyd::parse_key_list(configured_access_key, access_keys, error))
         {
             HYD_LOGF(error, "%s", error.c_str());
             return 1;
         }
     }
-    runtime.access_key = access_key;
+    else
+    {
+        const auto access_key_file = runtime.config.get_string(
+            "access_key_file", (runtime.config.data_dir() / "api_access_key").string());
+
+        if (!hyd::load_key_file(access_key_file, access_keys, error))
+        {
+            HYD_LOGF(error, "%s", error.c_str());
+            return 1;
+        }
+
+        if (access_keys.empty())
+        {
+            const std::string generated = hyd::hex_encode(hyd::random_bytes(32));
+            if (!hyd::write_file_atomic(access_key_file, generated + "\n", error))
+            {
+                HYD_LOGF(error, "%s", error.c_str());
+                return 1;
+            }
+            if (::chmod(access_key_file.c_str(), 0600) != 0)
+            {
+                HYD_LOGF(error, "cannot chmod %s: %s", access_key_file.c_str(),
+                    hyd::errno_string(errno).c_str());
+                return 1;
+            }
+            access_keys.push_back(generated);
+        }
+    }
+
+    if (access_keys.empty())
+    {
+        HYD_LOGF(error, "no API access keys configured");
+        return 1;
+    }
+
+    runtime.access_keys = std::move(access_keys);
+    HYD_LOGF(info, "API access keys: %zu", runtime.access_keys.size());
 
     std::string service_key = runtime.config.get_string("service_key");
     if (service_key.empty())
@@ -578,7 +613,10 @@ int main(int argc, char** argv)
 
     if (options->print_access_key)
     {
-        std::cout << runtime.access_key << "\n";
+        for (const auto& key : runtime.access_keys)
+        {
+            std::cout << key << "\n";
+        }
         return 0;
     }
 
@@ -590,7 +628,7 @@ int main(int argc, char** argv)
     const std::string service_name = runtime.config.get_string("service_name", "public tag repository");
 
     runtime.handlers = std::make_shared<hyd::ApiHandlers>(
-        runtime.config, runtime.access_key, runtime.service_key, service_name, kVersion);
+        runtime.config, runtime.access_keys, runtime.service_key, service_name, kVersion);
     runtime.handlers->set_build_progress(runtime.build_progress);
 
     if (!hyd::load_sync_state(runtime.config.state_dir() / "sync.json", runtime.sync_state, error))

@@ -13,13 +13,14 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace hyd {
 
 class ApiHandlers
 {
 public:
-    ApiHandlers(Config config, std::string access_key, std::string service_key,
+    ApiHandlers(Config config, std::vector<std::string> access_keys, std::string service_key,
         std::string service_name, std::string version);
 
     ApiResponse handle(const ApiRequest& request);
@@ -30,7 +31,7 @@ public:
     void set_next_check_at(std::int64_t timestamp) { next_check_at_.store(timestamp); }
     void set_build_progress(std::shared_ptr<BuildProgress> progress) { build_progress_ = std::move(progress); }
 
-    const std::string& access_key() const { return access_key_; }
+    const std::vector<std::string>& access_keys() const { return access_keys_; }
     const std::string& service_key() const { return service_key_; }
 
 private:
@@ -54,7 +55,7 @@ private:
     nlohmann::json base_response() const;
 
     Config config_;
-    std::string access_key_;
+    std::vector<std::string> access_keys_;
     std::string service_key_;
     std::string service_name_;
     std::string version_;

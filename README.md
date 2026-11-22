@@ -43,7 +43,7 @@ The commented default file is [`contrib/hydd.conf`](contrib/hydd.conf). The main
 | --- | --- | --- |
 | `data_dir` | `/var/lib/hyd` | Store, state, cache, and generated keys |
 | `listen_address` / `listen_port` | `127.0.0.1` / `45869` | API listener |
-| `access_key` / `access_key_file` | generated | API access key |
+| `access_key` / `access_key_file` | generated | One or more API keys; comma-separated in config, one per line in the file |
 | `require_localhost_key` | `false` | Require a valid key even on loopback (disables localhost trust) |
 | `repository_url` | `https://ptr.hydrus.network:45871` | Upstream PTR |
 | `compression` | `true` | `true` = hyd's custom store, `false` = SQLite |
@@ -111,6 +111,7 @@ curl -s -X POST \
 - The PTR contains exactly four hash-table values that are not valid SHA-256/SHA-1/MD5 hashes and can never be queried. Those four are skipped and reported as expected, matching what the official Hydrus client does (it stores them as opaque blobs and never resolves them). Any other invalid value still aborts the sync.
 - `/health` and `/stats` are hydd extensions and are unauthenticated, like `/api_version`. They expose aggregate counts and sync timing only - no keys, hashes, or tags. `hydd --stats` renders the same data as a human-readable page, including live progress for the one-time initial build (phase, partition, files, bytes, elapsed, ETA), and does not need root or data-directory access. Keep `listen_address = 127.0.0.1` unless you accept publishing those counts.
 - Loopback TCP peers skip the API key check by default, and a bogus key is ignored too, so local tools work without `sudo -u hyd`. Set `require_localhost_key = true` to require a valid key from localhost as well. The check uses the socket peer, not `X-Forwarded-For`. If a public reverse proxy connects to hydd from localhost, loopback trust makes the read-only API public through that proxy.
+- `access_key` accepts one key or a comma-separated list; `access_key_file` accepts one key per line, with blank lines and `#` comments ignored. Removing a key and restarting revokes it (sessions live in memory, so they are cleared by the restart). `hydd --print-access-key` prints every configured key.
 - `contrib/hyd` (installed as `/usr/bin/hyd`) is a small helper: portable SHA-256/SHA-1/MD5 hashing plus `hyd tag FILE`, `hyd lookup HASH`, `hyd stats`, `hyd scan`, `hyd verify`, and `hyd version`. Set `HYD_BIN` or `HYD_CONFIG` to override the defaults. `hydd --api-query HASH` is the underlying API-backed lookup.
 - `hydd --scan-updates` re-parses every cached update file, verifies its sha256 against the cache filename, and reports all format failures at once. Run it after a large download and before a long build, or after a Hydrus update.
 - Hydrus uses SQLite, but a Hydrus client database is split across several files with a client-specific schema. The SQLite backend here is a simpler mirror schema, not a byte-compatible Hydrus client database. PostgreSQL is not implemented.

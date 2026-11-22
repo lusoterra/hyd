@@ -36,7 +36,7 @@ listen_address = 127.0.0.1
 listen_port = ${PORT_API}
 repository_url = http://127.0.0.1:${PORT_REPO}
 repository_access_key = 1111111111111111111111111111111111111111111111111111111111111111
-access_key = 2222222222222222222222222222222222222222222222222222222222222222
+access_key = 2222222222222222222222222222222222222222222222222222222222222222,3333333333333333333333333333333333333333333333333333333333333333
 require_localhost_key = true
 service_name = integration ptr
 partitions = 4
@@ -108,13 +108,19 @@ curl -s "http://127.0.0.1:${PORT_API}/stats" | grep -q '"built":true'
 curl -s "http://127.0.0.1:${PORT_API}/stats" | grep -q '"phase":"idle"'
 
 KEY=2222222222222222222222222222222222222222222222222222222222222222
+KEY2=3333333333333333333333333333333333333333333333333333333333333333
 BASE="http://127.0.0.1:${PORT_API}"
 VERSION=$("${BIN}" --version | awk '{print $2}')
 curl -s "${BASE}/api_version" | grep -q "\"hyd_version\":\"${VERSION}\""
 
+KEYS=$("${BIN}" -c "${WORK}/hydd.conf" --print-access-key)
+echo "${KEYS}" | grep -q "${KEY}"
+echo "${KEYS}" | grep -q "${KEY2}"
+
 [ "$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/get_services")" = "401" ]
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: bad" "${BASE}/get_services")" = "403" ]
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" "${BASE}/get_services")" = "200" ]
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY2}" "${BASE}/get_services")" = "200" ]
 
 # API-backed query and the hyd helper must work without a daemon data dir.
 OUT=$("${BIN}" -c "${WORK}/hydd.conf" -d "${WORK}/api-query-no-data" --api-query "${H1}")

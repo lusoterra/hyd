@@ -221,29 +221,33 @@ std::string local_api_url(const Config& config)
     return "http://" + host + ":" + std::to_string(config.listen_port());
 }
 
-std::string local_api_key(const Config& config)
+std::vector<std::string> local_api_keys(const Config& config)
 {
-    std::string key = config.get_string("access_key");
-    if (key.empty())
+    std::vector<std::string> keys;
+    std::string ignored;
+
+    const std::string configured = config.get_string("access_key");
+    if (!configured.empty())
+    {
+        parse_key_list(configured, keys, ignored);
+    }
+
+    if (keys.empty())
     {
         if (const char* environment = std::getenv("HYDD_API_KEY"); environment != nullptr)
         {
-            key = environment;
+            parse_key_list(environment, keys, ignored);
         }
     }
 
-    if (key.empty())
+    if (keys.empty())
     {
         const auto path = config.get_string(
             "access_key_file", (config.data_dir() / "api_access_key").string());
-        std::string error;
-        if (const auto bytes = read_file(path, error))
-        {
-            key = trim(std::string(bytes->begin(), bytes->end()));
-        }
+        load_key_file(path, keys, ignored);
     }
 
-    return key;
+    return keys;
 }
 
 } // namespace
@@ -616,33 +620,53 @@ int run_api_query(const Config& config, std::string_view hash)
     }
 
     const std::string api_url = local_api_url(config);
-    const std::string key = local_api_key(config);
+    const auto keys = local_api_keys(config);
 
     int exit_code = 0;
     {
         HttpClient client(api_url, std::string(), "hydd-query");
         client.set_timeout_seconds(10);
         client.set_retries(0);
-        if (!key.empty())
-        {
-            client.set_api_access_key(key);
-        }
 
         HttpResponse response;
-        std::string error;
+        std::string last_error;
         const std::string path = "/get_files/file_metadata?hashes=" + std::string(hash);
 
-        if (!client.get(path, response, error))
+        std::vector<std::string> attempts = keys;
+        if (attempts.empty())
         {
-            if (error.rfind("HTTP 401", 0) == 0 || error.rfind("HTTP 403", 0) == 0)
+            attempts.emplace_back();
+        }
+
+        bool got_response = false;
+        for (std::size_t attempt = 0; attempt < attempts.size(); ++attempt)
+        {
+            client.set_api_access_key(attempts[attempt]);
+            if (client.get(path, response, last_error))
             {
-                std::cerr << "hydd: the API at " << api_url << " requires an access key.\n";
-                std::cerr << "run as the hyd user, set HYDD_API_KEY, or set "
+                got_response = true;
+                break;
+            }
+
+            const bool auth_error = last_error.rfind("HTTP 401", 0) == 0
+                || last_error.rfind("HTTP 403", 0) == 0;
+            if (!auth_error || attempt + 1 >= attempts.size())
+            {
+                break;
+            }
+        }
+
+        if (!got_response)
+        {
+            if (last_error.rfind("HTTP 401", 0) == 0 || last_error.rfind("HTTP 403", 0) == 0)
+            {
+                std::cerr << "hydd: the API at " << api_url << " rejected every configured access key.\n";
+                std::cerr << "set HYDD_API_KEY, add a key to access_key_file, or set "
                              "require_localhost_key = false to trust localhost\n";
             }
             else
             {
-                std::cerr << "hydd: cannot reach the API at " << api_url << ": " << error << "\n";
+                std::cerr << "hydd: cannot reach the API at " << api_url << ": " << last_error << "\n";
             }
             exit_code = 1;
         }
