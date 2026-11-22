@@ -436,6 +436,63 @@ ApiResponse ApiHandlers::route(const ApiRequest& request)
         }
         body["estimated_update_applied_at"] = estimated_applied;
 
+        if (build_progress_)
+        {
+            const auto* progress = build_progress_.get();
+            const int phase = progress->phase.load();
+            const auto started_at = progress->started_at.load();
+            const auto updated_at = progress->updated_at.load();
+            const auto files_done = progress->files_done.load();
+            const auto files_total = progress->files_total.load();
+            const auto bytes_done = progress->bytes_done.load();
+            const auto bytes_total = progress->bytes_total.load();
+            const auto phase_started_at = phase == BuildProgress::phase_partitions
+                ? progress->partition_started_at.load()
+                : started_at;
+            const auto phase_elapsed = phase_started_at > 0 && now > phase_started_at
+                ? now - phase_started_at
+                : 0;
+            const auto eta = files_done > 0 && files_total > files_done && phase_elapsed > 0
+                ? phase_elapsed * static_cast<std::int64_t>(files_total - files_done)
+                    / static_cast<std::int64_t>(files_done)
+                : 0;
+
+            nlohmann::json build;
+            build["active"] = phase != BuildProgress::phase_idle;
+            if (phase == BuildProgress::phase_definitions)
+            {
+                build["phase"] = "definitions";
+            }
+            else if (phase == BuildProgress::phase_partitions)
+            {
+                build["phase"] = "partitions";
+            }
+            else
+            {
+                build["phase"] = "idle";
+            }
+            build["partition"] = progress->partition.load();
+            build["partitions"] = progress->partitions.load();
+            build["files_done"] = files_done;
+            build["files_total"] = files_total;
+            build["bytes_done"] = bytes_done;
+            build["bytes_total"] = bytes_total;
+            build["hashes"] = progress->hashes.load();
+            build["mappings"] = progress->mappings.load();
+            build["percent"] = files_total > 0
+                ? 100.0 * static_cast<double>(files_done) / static_cast<double>(files_total)
+                : 0.0;
+            build["bytes_percent"] = bytes_total > 0
+                ? 100.0 * static_cast<double>(bytes_done) / static_cast<double>(bytes_total)
+                : 0.0;
+            build["started_at"] = started_at;
+            build["updated_at"] = updated_at;
+            build["elapsed_seconds"] = started_at > 0 && now > started_at ? now - started_at : 0;
+            build["phase_elapsed_seconds"] = phase_elapsed;
+            build["eta_seconds"] = eta;
+            body["build"] = std::move(build);
+        }
+
         const auto store = store_.load();
         body["store_open"] = static_cast<bool>(store);
         body["hash_count"] = sync_state_.hash_count;

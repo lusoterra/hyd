@@ -60,6 +60,54 @@ bool stopped(const SyncCallbacks& callbacks)
     return callbacks.should_stop && callbacks.should_stop();
 }
 
+std::string format_eta(std::int64_t seconds)
+{
+    if (seconds < 0)
+    {
+        return "unknown";
+    }
+    if (seconds == 0)
+    {
+        return "0s";
+    }
+
+    char buffer[32];
+    if (seconds < 60)
+    {
+        std::snprintf(buffer, sizeof(buffer), "%llds", static_cast<long long>(seconds));
+    }
+    else if (seconds < 3600)
+    {
+        std::snprintf(buffer, sizeof(buffer), "%lldm", static_cast<long long>(seconds / 60));
+    }
+    else
+    {
+        std::snprintf(buffer, sizeof(buffer), "%lldh%02lldm",
+            static_cast<long long>(seconds / 3600),
+            static_cast<long long>((seconds % 3600) / 60));
+    }
+    return buffer;
+}
+
+double progress_percent(std::uint64_t done, std::uint64_t total)
+{
+    return total == 0 ? 0.0 : 100.0 * static_cast<double>(done) / static_cast<double>(total);
+}
+
+struct BuildProgressGuard
+{
+    BuildProgress* progress = nullptr;
+
+    ~BuildProgressGuard()
+    {
+        if (progress != nullptr)
+        {
+            progress->phase.store(BuildProgress::phase_idle);
+            progress->updated_at.store(now_unix());
+        }
+    }
+};
+
 struct TagSegmentWriter
 {
     struct Entry
@@ -875,6 +923,35 @@ bool build_initial_store(const Config& config, const RepositoryMetadata& metadat
     const auto state_dir = config.state_dir();
     const std::size_t partitions = static_cast<std::size_t>(config.partitions());
 
+    BuildProgress* progress = callbacks.progress.get();
+    BuildProgressGuard progress_guard { progress };
+
+    std::vector<std::uint64_t> source_sizes(sources.size());
+    std::uint64_t sources_total_bytes = 0;
+    for (std::size_t i = 0; i < sources.size(); ++i)
+    {
+        source_sizes[i] = file_size_or_zero(sources[i].cache_path);
+        sources_total_bytes += source_sizes[i];
+    }
+
+    const std::int64_t build_started_at = now_unix();
+
+    if (progress != nullptr)
+    {
+        progress->phase.store(BuildProgress::phase_definitions);
+        progress->partition.store(0);
+        progress->partitions.store(static_cast<int>(partitions));
+        progress->files_done.store(0);
+        progress->files_total.store(sources.size());
+        progress->bytes_done.store(0);
+        progress->bytes_total.store(sources_total_bytes);
+        progress->hashes.store(0);
+        progress->mappings.store(0);
+        progress->started_at.store(build_started_at);
+        progress->partition_started_at.store(0);
+        progress->updated_at.store(now_unix());
+    }
+
     std::error_code ec;
     std::filesystem::remove_all(store_dir, ec);
     if (ec)
@@ -927,10 +1004,13 @@ bool build_initial_store(const Config& config, const RepositoryMetadata& metadat
     std::unordered_map<std::string, int> kinds;
 
     std::size_t processed = 0;
+    std::uint64_t processed_bytes = 0;
     auto last_report = std::chrono::steady_clock::now();
 
-    for (const auto& source : sources)
+    for (std::size_t source_index = 0; source_index < sources.size(); ++source_index)
     {
+        const auto& source = sources[source_index];
+
         if (stopped(callbacks))
         {
             error = "stopped";
@@ -951,11 +1031,31 @@ bool build_initial_store(const Config& config, const RepositoryMetadata& metadat
         }
         kinds[hex_encode(source.update.hash)] = static_cast<int>(kind);
         ++processed;
+        processed_bytes += source_sizes[source_index];
+
+        if (progress != nullptr)
+        {
+            progress->files_done.store(processed);
+            progress->bytes_done.store(processed_bytes);
+            progress->updated_at.store(now_unix());
+        }
 
         const auto now = std::chrono::steady_clock::now();
         if (std::chrono::duration<double>(now - last_report).count() > 10.0)
         {
-            HYD_LOGF(info, "definitions: %zu/%zu update files", processed, sources.size());
+            const auto elapsed = now_unix() - build_started_at;
+            const auto eta = processed > 0
+                ? elapsed * static_cast<std::int64_t>(sources.size() - processed)
+                    / static_cast<std::int64_t>(processed)
+                : 0;
+            HYD_LOGF(info,
+                "definitions: %zu/%zu update files (%.1f%%), %s/%s, elapsed %s, ETA %s",
+                processed, sources.size(),
+                progress_percent(processed, sources.size()),
+                human_bytes(processed_bytes).c_str(),
+                human_bytes(sources_total_bytes).c_str(),
+                format_eta(elapsed).c_str(),
+                format_eta(eta).c_str());
             last_report = now;
         }
     }
@@ -996,6 +1096,38 @@ bool build_initial_store(const Config& config, const RepositoryMetadata& metadat
     stats.tag_count = tag_writer.count;
     stats.tag_base = static_cast<std::uint32_t>(tag_writer.base_id);
 
+    std::uint64_t content_total_files = 0;
+    std::uint64_t content_total_bytes = 0;
+    for (std::size_t i = 0; i < sources.size(); ++i)
+    {
+        const auto kind_iterator = kinds.find(hex_encode(sources[i].update.hash));
+        if (kind_iterator != kinds.end()
+            && kind_iterator->second != static_cast<int>(UpdateKind::content))
+        {
+            continue;
+        }
+        ++content_total_files;
+        content_total_bytes += source_sizes[i];
+    }
+
+    if (progress != nullptr)
+    {
+        progress->phase.store(BuildProgress::phase_partitions);
+        progress->partition.store(0);
+        progress->files_done.store(0);
+        progress->files_total.store(content_total_files);
+        progress->bytes_done.store(0);
+        progress->bytes_total.store(content_total_bytes);
+        progress->hashes.store(0);
+        progress->mappings.store(0);
+        progress->partition_started_at.store(0);
+        progress->updated_at.store(now_unix());
+    }
+
+    HYD_LOGF(info, "initial sync: %llu content update files (%s) across %zu partitions",
+        static_cast<unsigned long long>(content_total_files),
+        human_bytes(content_total_bytes).c_str(), partitions);
+
     std::unordered_map<std::uint32_t, std::uint32_t> siblings;
     std::unordered_map<std::uint32_t, std::vector<std::uint32_t>> parents;
 
@@ -1009,6 +1141,18 @@ bool build_initial_store(const Config& config, const RepositoryMetadata& metadat
         }
 
         HYD_LOGF(info, "partition %zu/%zu: reading hash definitions", p + 1, partitions);
+
+        const std::int64_t partition_started_at = now_unix();
+        if (progress != nullptr)
+        {
+            progress->partition.store(static_cast<int>(p + 1));
+            progress->files_done.store(0);
+            progress->bytes_done.store(0);
+            progress->hashes.store(0);
+            progress->mappings.store(0);
+            progress->partition_started_at.store(partition_started_at);
+            progress->updated_at.store(partition_started_at);
+        }
 
         char defs_name[32];
         std::snprintf(defs_name, sizeof(defs_name), "defs-%02zu.bin", p);
@@ -1053,12 +1197,25 @@ bool build_initial_store(const Config& config, const RepositoryMetadata& metadat
         mappings.reserve(hash_entries.size());
         std::unordered_set<std::uint32_t> deleted_hashes;
 
+        if (progress != nullptr)
+        {
+            progress->hashes.store(hash_entries.size());
+        }
+
+        HYD_LOGF(info, "partition %zu/%zu: %llu content update files (%s)",
+            p + 1, partitions, static_cast<unsigned long long>(content_total_files),
+            human_bytes(content_total_bytes).c_str());
+
         PartitionVisitor partition_visitor(p, partitions, membership, mappings, deleted_hashes,
             p == 0, siblings, parents);
 
         std::size_t content_files = 0;
-        for (const auto& source : sources)
+        std::uint64_t content_bytes = 0;
+        auto last_partition_report = std::chrono::steady_clock::now();
+        for (std::size_t source_index = 0; source_index < sources.size(); ++source_index)
         {
+            const auto& source = sources[source_index];
+
             if (stopped(callbacks))
             {
                 error = "stopped";
@@ -1087,6 +1244,36 @@ bool build_initial_store(const Config& config, const RepositoryMetadata& metadat
             if (kind == UpdateKind::content)
             {
                 ++content_files;
+                content_bytes += source_sizes[source_index];
+
+                if (progress != nullptr)
+                {
+                    progress->files_done.store(content_files);
+                    progress->bytes_done.store(content_bytes);
+                    progress->mappings.store(partition_visitor.row_count());
+                    progress->updated_at.store(now_unix());
+                }
+            }
+
+            const auto now = std::chrono::steady_clock::now();
+            if (std::chrono::duration<double>(now - last_partition_report).count() > 10.0)
+            {
+                const auto elapsed = now_unix() - partition_started_at;
+                const auto eta = content_files > 0
+                    ? elapsed * static_cast<std::int64_t>(content_total_files - content_files)
+                        / static_cast<std::int64_t>(content_files)
+                    : 0;
+                HYD_LOGF(info,
+                    "partition %zu/%zu: %zu/%llu content files (%.1f%%), %s/%s, "
+                    "%llu mappings, elapsed %s, ETA %s",
+                    p + 1, partitions, content_files,
+                    static_cast<unsigned long long>(content_total_files),
+                    progress_percent(content_files, content_total_files),
+                    human_bytes(content_bytes).c_str(),
+                    human_bytes(content_total_bytes).c_str(),
+                    static_cast<unsigned long long>(partition_visitor.row_count()),
+                    format_eta(elapsed).c_str(), format_eta(eta).c_str());
+                last_partition_report = now;
             }
         }
 
@@ -1106,8 +1293,19 @@ bool build_initial_store(const Config& config, const RepositoryMetadata& metadat
                 legacy_hashes.end());
         }
 
-        HYD_LOGF(info, "partition %zu/%zu: %zu hashes, %zu mappings (%zu content updates)",
-            p + 1, partitions, hash_entries.size(), mappings.size(), content_files);
+        if (progress != nullptr)
+        {
+            progress->hashes.store(hash_entries.size());
+            progress->mappings.store(partition_visitor.row_count());
+            progress->updated_at.store(now_unix());
+        }
+
+        HYD_LOGF(info,
+            "partition %zu/%zu complete: %zu hashes, %zu mappings "
+            "(%zu content files, %s) in %s",
+            p + 1, partitions, hash_entries.size(), mappings.size(), content_files,
+            human_bytes(content_bytes).c_str(),
+            format_eta(now_unix() - partition_started_at).c_str());
 
         char partition_name[32];
         std::snprintf(partition_name, sizeof(partition_name), "p%02zu", p);

@@ -104,6 +104,7 @@ echo "${STATS}" | grep -q 'Mappings'
 echo "${STATS}" | grep -q 'ready'
 [ ! -e "${WORK}/stats-no-data" ]
 curl -s "http://127.0.0.1:${PORT_API}/stats" | grep -q '"built":true'
+curl -s "http://127.0.0.1:${PORT_API}/stats" | grep -q '"phase":"idle"'
 
 KEY=2222222222222222222222222222222222222222222222222222222222222222
 BASE="http://127.0.0.1:${PORT_API}"

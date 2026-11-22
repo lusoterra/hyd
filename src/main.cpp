@@ -406,6 +406,7 @@ struct Runtime
     std::string service_key;
     std::shared_ptr<hyd::ApiHandlers> handlers;
     std::shared_ptr<const hyd::TagSource> store;
+    std::shared_ptr<hyd::BuildProgress> build_progress = std::make_shared<hyd::BuildProgress>();
     hyd::SyncState sync_state;
     std::mutex store_mutex;
 };
@@ -445,6 +446,7 @@ void run_sync(Runtime& runtime, bool& stopped, std::string& error)
 {
     hyd::SyncCallbacks callbacks;
     callbacks.should_stop = [] { return g_stop.load(); };
+    callbacks.progress = runtime.build_progress;
     callbacks.on_store_ready = [&runtime] {
         std::string reload_error;
         if (!reload_store(runtime, reload_error))
@@ -577,6 +579,7 @@ int main(int argc, char** argv)
 
     runtime.handlers = std::make_shared<hyd::ApiHandlers>(
         runtime.config, runtime.access_key, runtime.service_key, service_name, kVersion);
+    runtime.handlers->set_build_progress(runtime.build_progress);
 
     if (!hyd::load_sync_state(runtime.config.state_dir() / "sync.json", runtime.sync_state, error))
     {

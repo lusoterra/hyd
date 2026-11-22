@@ -28,6 +28,7 @@ public:
     void set_sync_state(const SyncState& state);
     void set_partial(bool partial) { partial_.store(partial); }
     void set_next_check_at(std::int64_t timestamp) { next_check_at_.store(timestamp); }
+    void set_build_progress(std::shared_ptr<BuildProgress> progress) { build_progress_ = std::move(progress); }
 
     const std::string& access_key() const { return access_key_; }
     const std::string& service_key() const { return service_key_; }
@@ -61,6 +62,7 @@ private:
     double boot_time_ = 0.0;
 
     std::atomic<std::shared_ptr<const TagSource>> store_ {};
+    std::shared_ptr<BuildProgress> build_progress_;
     mutable std::mutex state_mutex_;
     SyncState sync_state_;
     std::atomic<bool> partial_ { false };

@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <string>
 
 namespace hyd {
@@ -33,12 +34,40 @@ struct SyncState
 bool load_sync_state(const std::filesystem::path& path, SyncState& state, std::string& error);
 bool save_sync_state(const std::filesystem::path& path, const SyncState& state, std::string& error);
 
+// Live progress for the one-time, multi-pass initial build. Only the initial
+// build fills this in; incremental syncs and compaction are quick enough that
+// the normal sync logs suffice.
+struct BuildProgress
+{
+    enum Phase : int
+    {
+        phase_idle = 0,
+        phase_definitions = 1,
+        phase_partitions = 2,
+    };
+
+    std::atomic<int> phase { phase_idle };
+    std::atomic<int> partition { 0 };
+    std::atomic<int> partitions { 0 };
+    std::atomic<std::uint64_t> files_done { 0 };
+    std::atomic<std::uint64_t> files_total { 0 };
+    std::atomic<std::uint64_t> bytes_done { 0 };
+    std::atomic<std::uint64_t> bytes_total { 0 };
+    std::atomic<std::uint64_t> hashes { 0 };
+    std::atomic<std::uint64_t> mappings { 0 };
+    std::atomic<std::int64_t> started_at { 0 };
+    std::atomic<std::int64_t> partition_started_at { 0 };
+    std::atomic<std::int64_t> updated_at { 0 };
+};
+
 struct SyncCallbacks
 {
     // Called after the on-disk store has changed and can be re-opened.
     std::function<void()> on_store_ready;
     // Return true to abort the sync promptly.
     std::function<bool()> should_stop;
+    // Optional live progress for the initial multi-pass build.
+    std::shared_ptr<BuildProgress> progress;
 };
 
 // Performs one sync pass: fetches new metadata, downloads missing update

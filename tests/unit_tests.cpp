@@ -238,6 +238,39 @@ int main()
     }
 
     {
+        // Stats rendering: an active initial build.
+        const nlohmann::json building = {
+            { "built", false },
+            { "store_open", false },
+            { "build", {
+                { "active", true },
+                { "phase", "partitions" },
+                { "partition", 2 },
+                { "partitions", 16 },
+                { "files_done", 1234 },
+                { "files_total", 19343 },
+                { "bytes_done", 123456789 },
+                { "bytes_total", 17000000000ull },
+                { "hashes", 100000 },
+                { "mappings", 3456789 },
+                { "elapsed_seconds", 200 },
+                { "phase_elapsed_seconds", 150 },
+                { "eta_seconds", 1800 },
+            } },
+        };
+
+        const auto stats = render_stats(
+            building, nullptr, "http://127.0.0.1:45869", "fallback");
+        assert(stats.find("building initial store") != std::string::npos);
+        assert(stats.find("partitions 2/16") != std::string::npos);
+        assert(stats.find("1,234 / 19,343") != std::string::npos);
+        assert(stats.find("6.4%") != std::string::npos);
+        assert(stats.find("Build ETA") != std::string::npos);
+        assert(stats.find("Build mapped") != std::string::npos);
+        assert(stats.find("3,456,789") != std::string::npos);
+    }
+
+    {
         // Stats rendering: an empty or mostly-unavailable daemon must not throw.
         const auto stats = render_stats(
             nlohmann::json::object(), nullptr, "http://127.0.0.1:45869", "fallback");

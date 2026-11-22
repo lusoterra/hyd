@@ -9,6 +9,7 @@
 #include <ctime>
 #include <iomanip>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <optional>
 #include <sstream>
@@ -157,6 +158,34 @@ std::string duration(std::int64_t seconds)
     return out.str();
 }
 
+std::string format_bytes(std::uint64_t bytes)
+{
+    static constexpr const char* units[] = { "B", "KiB", "MiB", "GiB", "TiB" };
+    double value = static_cast<double>(bytes);
+    std::size_t unit = 0;
+    while (value >= 1024.0 && unit + 1 < std::size(units))
+    {
+        value /= 1024.0;
+        ++unit;
+    }
+
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(unit == 0 ? 0 : 2) << value << " " << units[unit];
+    return out.str();
+}
+
+std::string format_ratio(std::uint64_t done, std::uint64_t total)
+{
+    std::ostringstream out;
+    out << commas(done) << " / " << commas(total);
+    if (total > 0)
+    {
+        out << " (" << std::fixed << std::setprecision(1)
+            << 100.0 * static_cast<double>(done) / static_cast<double>(total) << "%)";
+    }
+    return out.str();
+}
+
 void add_row(std::ostringstream& out, const char* label, const std::string& value)
 {
     out << "  " << std::left << std::setw(17) << label << " " << value << "\n";
@@ -196,6 +225,10 @@ std::string render_stats(const nlohmann::json& health, const nlohmann::json* api
     const bool store_open = health.value("store_open", false);
     const bool partial = health.value("partial", false);
 
+    const auto build_iterator = health.find("build");
+    const bool have_build = build_iterator != health.end() && build_iterator->is_object();
+    const bool build_active = have_build && build_iterator->value("active", false);
+
     out << "hydd statistics for " << api_url << "\n\n";
 
     add_row(out, "Service", service_name);
@@ -207,7 +240,9 @@ std::string render_stats(const nlohmann::json& health, const nlohmann::json* api
     std::string status;
     if (!built)
     {
-        status = "building initial store";
+        status = have_build && !build_active
+            ? "not built yet (check the log)"
+            : "building initial store";
     }
     else if (!store_open)
     {
@@ -222,6 +257,57 @@ std::string render_stats(const nlohmann::json& health, const nlohmann::json* api
         status = "ready";
     }
     add_row(out, "Status", status);
+
+    if (build_active)
+    {
+        const std::string phase = string_field(*build_iterator, "phase");
+        if (phase == "partitions")
+        {
+            const auto partition = get_u64(*build_iterator, "partition").value_or(0);
+            const auto partitions = get_u64(*build_iterator, "partitions").value_or(0);
+            add_row(out, "Build phase",
+                "partitions " + std::to_string(partition) + "/" + std::to_string(partitions));
+        }
+        else if (!phase.empty())
+        {
+            add_row(out, "Build phase", phase);
+        }
+
+        if (const auto done = get_u64(*build_iterator, "files_done"),
+            total = get_u64(*build_iterator, "files_total");
+            done && total && *total > 0)
+        {
+            add_row(out, "Build files", format_ratio(*done, *total));
+        }
+
+        if (const auto done = get_u64(*build_iterator, "bytes_done"),
+            total = get_u64(*build_iterator, "bytes_total");
+            done && total && *total > 0)
+        {
+            add_row(out, "Build data", format_bytes(*done) + " / " + format_bytes(*total));
+        }
+
+        if (const auto elapsed = get_i64(*build_iterator, "phase_elapsed_seconds");
+            elapsed && *elapsed > 0)
+        {
+            add_row(out, "Build elapsed", duration(*elapsed));
+        }
+
+        if (const auto eta = get_i64(*build_iterator, "eta_seconds"); eta && *eta > 0)
+        {
+            add_row(out, "Build ETA", "~" + duration(*eta) + " (this pass)");
+        }
+
+        if (const auto hashes = get_u64(*build_iterator, "hashes"); hashes && *hashes > 0)
+        {
+            add_row(out, "Build hashes", commas(*hashes) + " in this partition");
+        }
+
+        if (const auto mappings = get_u64(*build_iterator, "mappings"); mappings && *mappings > 0)
+        {
+            add_row(out, "Build mapped", commas(*mappings) + " rows in this partition");
+        }
+    }
 
     std::string backend = string_field(health, "backend");
     if (!backend.empty())
@@ -375,7 +461,14 @@ std::string render_stats(const nlohmann::json& health, const nlohmann::json* api
 
     if (!built)
     {
-        out << "\n  note: the initial build is still running; figures will grow until it completes\n";
+        if (build_active)
+        {
+            out << "\n  note: the initial build is in progress; counts will grow until it completes\n";
+        }
+        else
+        {
+            out << "\n  note: the initial build has not completed; check the log for errors\n";
+        }
     }
     else if (store_open
              && (!get_u64(health, "siblings") || !get_u64(health, "parents")
