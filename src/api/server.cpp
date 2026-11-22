@@ -26,6 +26,35 @@ std::string lower(std::string_view value)
     return to_lower(value);
 }
 
+std::string peer_address(const sockaddr_storage& address)
+{
+    char buffer[INET6_ADDRSTRLEN] = {};
+    if (address.ss_family == AF_INET)
+    {
+        const auto* ipv4 = reinterpret_cast<const sockaddr_in*>(&address);
+        if (::inet_ntop(AF_INET, &ipv4->sin_addr, buffer, sizeof(buffer)) == nullptr)
+        {
+            return {};
+        }
+    }
+    else if (address.ss_family == AF_INET6)
+    {
+        const auto* ipv6 = reinterpret_cast<const sockaddr_in6*>(&address);
+        if (IN6_IS_ADDR_V4MAPPED(&ipv6->sin6_addr))
+        {
+            if (::inet_ntop(AF_INET, &ipv6->sin6_addr.s6_addr[12], buffer, sizeof(buffer)) == nullptr)
+            {
+                return {};
+            }
+        }
+        else if (::inet_ntop(AF_INET6, &ipv6->sin6_addr, buffer, sizeof(buffer)) == nullptr)
+        {
+            return {};
+        }
+    }
+    return buffer;
+}
+
 std::string status_text(int status)
 {
     switch (status)
@@ -173,11 +202,11 @@ void ApiServer::accept_loop()
             break;
         }
 
-        std::thread(&ApiServer::handle_connection, this, client).detach();
+        std::thread(&ApiServer::handle_connection, this, client, peer_address(address)).detach();
     }
 }
 
-void ApiServer::handle_connection(int socket_fd)
+void ApiServer::handle_connection(int socket_fd, std::string remote_address)
 {
     struct timeval timeout {};
     timeout.tv_sec = 60;
@@ -213,6 +242,7 @@ void ApiServer::handle_connection(int socket_fd)
     }
 
     ApiRequest parsed;
+    parsed.remote_address = std::move(remote_address);
     std::size_t body_start = header_end + 4;
 
     {

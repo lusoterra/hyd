@@ -61,6 +61,7 @@ target_compile_options(hydd PRIVATE -Wall -Wextra -Wpedantic -Wno-unused-paramet
 include(GNUInstallDirs)
 
 install(TARGETS hydd RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(PROGRAMS contrib/hyd DESTINATION ${CMAKE_INSTALL_BINDIR})
 # Linux daemons use /etc, not <prefix>/etc, even when the prefix is /usr.
 install(FILES contrib/hydd.conf DESTINATION /etc RENAME hydd.conf
     PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ)

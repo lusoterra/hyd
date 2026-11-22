@@ -37,6 +37,7 @@ listen_port = ${PORT_API}
 repository_url = http://127.0.0.1:${PORT_REPO}
 repository_access_key = 1111111111111111111111111111111111111111111111111111111111111111
 access_key = 2222222222222222222222222222222222222222222222222222222222222222
+require_localhost_key = true
 service_name = integration ptr
 partitions = 4
 sync_interval_seconds = 3600
@@ -115,6 +116,19 @@ curl -s "${BASE}/api_version" | grep -q "\"hyd_version\":\"${VERSION}\""
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: bad" "${BASE}/get_services")" = "403" ]
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" "${BASE}/get_services")" = "200" ]
 
+# API-backed query and the hyd helper must work without a daemon data dir.
+OUT=$("${BIN}" -c "${WORK}/hydd.conf" -d "${WORK}/api-query-no-data" --api-query "${H1}")
+echo "${OUT}" | grep -q 'series:alpha'
+[ ! -e "${WORK}/api-query-no-data" ]
+
+printf 'alpha-file' > "${WORK}/alpha-file"
+HELPER_HASH=$(HYD_BIN="${BIN}" HYD_CONFIG="${WORK}/hydd.conf" \
+    "${ROOT}/contrib/hyd" sha256 "${WORK}/alpha-file")
+[ "${HELPER_HASH}" = "${H1}" ]
+HELPER_TAGS=$(HYD_BIN="${BIN}" HYD_CONFIG="${WORK}/hydd.conf" \
+    "${ROOT}/contrib/hyd" tag "${WORK}/alpha-file")
+echo "${HELPER_TAGS}" | grep -q 'series:alpha'
+
 BODY=$(curl -s -X POST -H 'Content-Type: application/json' \
     -H "Hydrus-Client-API-Access-Key: ${KEY}" \
     -d "{\"hashes\":[\"${H3}\"],\"only_return_identifiers\":true}" \
@@ -163,6 +177,23 @@ if STATS_OUT=$("${BIN}" -c "${WORK}/hydd.conf" --stats 2>&1); then
     exit 1
 fi
 echo "${STATS_OUT}" | grep -q 'cannot reach the API'
+
+# Loopback is trusted by default: no key and even a bogus key are accepted.
+# The main test config sets require_localhost_key = true, so use a clone.
+TRUST_PORT=$((PORT_API + 1))
+sed -e "s/^listen_port = .*/listen_port = ${TRUST_PORT}/" \
+    -e "/^require_localhost_key = true/d" \
+    "${WORK}/hydd.conf" > "${WORK}/hydd-trust.conf"
+"${BIN}" -c "${WORK}/hydd-trust.conf" --no-sync > "${WORK}/trust-daemon.log" 2>&1 &
+DAEMON_PID=$!
+sleep 0.8
+TRUST_BASE="http://127.0.0.1:${TRUST_PORT}"
+[ "$(curl -s -o /dev/null -w '%{http_code}' "${TRUST_BASE}/get_services")" = "200" ]
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H 'Hydrus-Client-API-Access-Key: bogus' "${TRUST_BASE}/get_services")" = "200" ]
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" "${TRUST_BASE}/get_services")" = "200" ]
+kill "${DAEMON_PID}" 2>/dev/null || true
+wait "${DAEMON_PID}" 2>/dev/null || true
+DAEMON_PID=
 
 # Compaction must preserve every query result and remove the delta journal.
 "${BIN}" -c "${WORK}/hydd.conf" --compact

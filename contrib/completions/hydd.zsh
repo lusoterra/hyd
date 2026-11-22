@@ -7,7 +7,8 @@ _arguments -s -S \
     '(-p --port)'{-p,--port}'[override API listen port]:port:' \
     '--no-sync[serve the existing store without syncing]' \
     '--sync-once[run one sync pass and exit]' \
-    '--query[print tags for a file hash (SHA-256, SHA-1, or MD5) and exit]:hash:' \
+    '--query[print tags from the local store for a file hash and exit]:hash:' \
+    '--api-query[query the running API for a file hash and exit]:hash:' \
     '--compact[merge pending deltas into the base store and exit]' \
     '--verify-store[open and validate the store and exit]' \
     '--scan-updates[parse every cached update file and report format errors]' \

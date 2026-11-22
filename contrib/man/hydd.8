@@ -45,7 +45,15 @@ Run one sync pass, building the store if necessary, then exit.
 .TP
 .BI \-\-query " " HASH
 Print the storage and display tags for a file hash (64-character SHA-256,
-40-character SHA-1, or 32-character MD5), then exit.
+40-character SHA-1, or 32-character MD5), then exit. Reads the local store
+directly.
+.TP
+.BI \-\-api\-query " " HASH
+Query the running daemon's API for a file hash and print its tags, then exit.
+Does not read the data directory, so it can run unprivileged. Loopback
+requests are trusted by default; set
+.B require_localhost_key
+to require a valid key from localhost too.
 .TP
 .B \-\-compact
 Merge the append-only delta journal into the immutable base store, then exit.
@@ -167,7 +175,10 @@ requires the
 header, the
 .B Hydrus-Client-API-Session-Key
 header, or the same parameter in the query string or JSON body. Missing keys
-return 401, invalid keys 403, and expired session keys 419.
+return 401, invalid keys 403, and expired session keys 419. Loopback TCP peers
+skip the key check by default, including when they send a bogus key. Set
+.B require_localhost_key
+to require a valid key from localhost as well.
 .PP
 The server speaks JSON only. CBOR requests return 406. File and thumbnail
 endpoints return 404 because the mirror stores no files. Search and mutation
@@ -183,6 +194,12 @@ Show repository statistics from the running daemon (no root needed):
 .PP
 .nf
     hydd --stats
+.fi
+.PP
+Look up tags for a file with the companion helper:
+.PP
+.nf
+    hyd tag photo.jpg
 .fi
 .PP
 Look up a file:

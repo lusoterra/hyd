@@ -32,6 +32,7 @@ public:
     void set_timeout_seconds(long seconds) { timeout_seconds_ = seconds; }
     void set_rate_limit_kib(std::uint64_t kib_per_second) { rate_limit_kib_ = kib_per_second; }
     void set_retries(int retries) { retries_ = retries; }
+    void set_api_access_key(std::string key) { api_access_key_ = std::move(key); }
 
     static void global_init();
     static void global_cleanup();
@@ -41,6 +42,7 @@ private:
 
     std::string base_url_;
     std::string access_key_;
+    std::string api_access_key_;
     CURL* handle_ = nullptr;
     std::string user_agent_;
     long timeout_seconds_ = 120;

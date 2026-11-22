@@ -22,13 +22,13 @@ _hydd()
             COMPREPLY=( $(compgen -W "trace debug info warn error off" -- "${cur}") )
             return 0
             ;;
-        --query)
+        --query|--api-query)
             return 0
             ;;
     esac
 
     opts="-c --config -d --data-dir -l --listen -p --port --no-sync --sync-once \
-          --query --compact --verify-store --scan-updates --stats --print-access-key --log-level -h --help -V --version"
+          --query --api-query --compact --verify-store --scan-updates --stats --print-access-key --log-level -h --help -V --version"
 
     COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
     return 0

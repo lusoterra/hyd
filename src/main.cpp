@@ -58,6 +58,7 @@ struct Options
     bool sync_once = false;
     bool no_sync = false;
     bool query = false;
+    bool api_query = false;
     bool verify_store = false;
     bool scan_updates = false;
     bool stats = false;
@@ -81,6 +82,7 @@ void print_help()
         "      --no-sync              Serve the existing store, do not sync\n"
         "      --sync-once            Run one sync pass and exit\n"
         "      --query HASH           Print the tags for a file hash and exit\n"
+        "      --api-query HASH       Query the running API for a file hash and exit\n"
         "      --verify-store         Open and validate the store and exit\n"
         "      --scan-updates         Parse every cached update file and report format errors\n"
         "      --stats                Query the running local API and print repository statistics\n"
@@ -106,6 +108,7 @@ std::optional<Options> parse_options(int argc, char** argv, std::string& error)
         { "no-sync", no_argument, nullptr, 1000 },
         { "sync-once", no_argument, nullptr, 1001 },
         { "query", required_argument, nullptr, 1002 },
+        { "api-query", required_argument, nullptr, 1009 },
         { "verify-store", no_argument, nullptr, 1003 },
         { "print-access-key", no_argument, nullptr, 1004 },
         { "compact", no_argument, nullptr, 1006 },
@@ -156,6 +159,10 @@ std::optional<Options> parse_options(int argc, char** argv, std::string& error)
                 break;
             case 1002:
                 options.query = true;
+                options.query_hash = optarg;
+                break;
+            case 1009:
+                options.api_query = true;
                 options.query_hash = optarg;
                 break;
             case 1003:
@@ -511,6 +518,11 @@ int main(int argc, char** argv)
         // Statistics only need the config and the local HTTP API. Dispatch
         // before any data-dir, key, or log-file work so it works unprivileged.
         return hyd::run_stats(runtime.config);
+    }
+
+    if (options->api_query)
+    {
+        return hyd::run_api_query(runtime.config, options->query_hash);
     }
 
     hyd::log_set_level(hyd::log_level_from_string(runtime.config.get_string("log_level", "info")));

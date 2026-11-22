@@ -92,6 +92,11 @@ bool HttpClient::perform(const std::string& url, HttpResponse& response, std::st
 
     curl_slist* headers = nullptr;
     headers = curl_slist_append(headers, ("Hydrus-Key: " + access_key_).c_str());
+    if (!api_access_key_.empty())
+    {
+        headers = curl_slist_append(headers,
+            ("Hydrus-Client-API-Access-Key: " + api_access_key_).c_str());
+    }
     headers = curl_slist_append(headers, "Accept: application/octet-stream");
 
     curl_easy_setopt(handle, CURLOPT_URL, url.c_str());

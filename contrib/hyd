@@ -1,0 +1,212 @@
+#!/usr/bin/env bash
+# hyd - small helper for a hydd read-only PTR mirror.
+#
+# Hash files portably, then look their tags up through the running daemon's
+# API (hydd --api-query). Set HYD_BIN or HYD_CONFIG to override the defaults.
+
+set -u
+
+HYD_BIN=${HYD_BIN:-hydd}
+HYD_CONFIG=${HYD_CONFIG:-/etc/hydd.conf}
+
+usage()
+{
+    cat <<'EOF'
+usage: hyd COMMAND [ARG...]
+
+Commands:
+  sha256 FILE...      print the SHA-256 hash of each file
+  sha1 FILE...        print the SHA-1 hash of each file
+  md5 FILE...         print the MD5 hash of each file
+  hash FILE...        alias for sha256
+  tag FILE...         print the PTR tags for each file
+  query FILE...       alias for tag
+  lookup HASH...      print the tags for one or more hashes
+  stats               show daemon, repository and build statistics
+  scan                parse every cached update file and report problems
+  verify              open and validate the local store
+  version             print the hydd version
+
+  --sha256/--sha1/--md5/--tag/--lookup/--stats/--scan/--verify are aliases
+  for the matching commands.
+
+Environment:
+  HYD_BIN             hydd executable (default: hydd)
+  HYD_CONFIG          config file (default: /etc/hydd.conf)
+
+The tag/lookup commands use the local API, so the daemon must be running.
+Loopback requests are trusted by default. If the daemon sets
+require_localhost_key = true, run as the hyd user or set HYDD_API_KEY.
+EOF
+}
+
+fail()
+{
+    printf 'hyd: %s\n' "$*" >&2
+    exit 1
+}
+
+require_bin()
+{
+    command -v "$HYD_BIN" >/dev/null 2>&1 || fail "cannot find $HYD_BIN (set HYD_BIN)"
+}
+
+hash_file()
+{
+    algo=$1
+    file=$2
+
+    [ -f "$file" ] || fail "not a file: $file"
+
+    case "$file" in
+        -*) file="./$file" ;;
+    esac
+
+    case "$algo" in
+        sha256)
+            if command -v sha256sum >/dev/null 2>&1; then
+                sha256sum "$file" | awk '{print $1}'
+            elif command -v shasum >/dev/null 2>&1; then
+                shasum -a 256 "$file" | awk '{print $1}'
+            elif command -v openssl >/dev/null 2>&1; then
+                openssl dgst -sha256 < "$file" | awk '{print $NF}'
+            else
+                fail "no SHA-256 tool found (need sha256sum, shasum, or openssl)"
+            fi
+            ;;
+        sha1)
+            if command -v sha1sum >/dev/null 2>&1; then
+                sha1sum "$file" | awk '{print $1}'
+            elif command -v shasum >/dev/null 2>&1; then
+                shasum -a 1 "$file" | awk '{print $1}'
+            elif command -v openssl >/dev/null 2>&1; then
+                openssl dgst -sha1 < "$file" | awk '{print $NF}'
+            else
+                fail "no SHA-1 tool found (need sha1sum, shasum, or openssl)"
+            fi
+            ;;
+        md5)
+            if command -v md5sum >/dev/null 2>&1; then
+                md5sum "$file" | awk '{print $1}'
+            elif command -v md5 >/dev/null 2>&1; then
+                md5 -q "$file"
+            elif command -v openssl >/dev/null 2>&1; then
+                openssl dgst -md5 < "$file" | awk '{print $NF}'
+            else
+                fail "no MD5 tool found (need md5sum, md5, or openssl)"
+            fi
+            ;;
+        *)
+            fail "unknown hash algorithm: $algo"
+            ;;
+    esac
+}
+
+cmd_hash()
+{
+    algo=$1
+    shift
+    [ "$#" -gt 0 ] || fail "no files given"
+    for file in "$@"; do
+        hash_file "$algo" "$file" || exit 1
+    done
+}
+
+cmd_lookup()
+{
+    require_bin
+    [ "$#" -gt 0 ] || fail "no hashes given"
+    for hash in "$@"; do
+        "$HYD_BIN" -c "$HYD_CONFIG" --api-query "$hash" || exit 1
+    done
+}
+
+cmd_tag()
+{
+    require_bin
+    [ "$#" -gt 0 ] || fail "no files given"
+    for file in "$@"; do
+        hash=$(hash_file sha256 "$file") || exit 1
+        printf '# %s\n' "$file"
+        "$HYD_BIN" -c "$HYD_CONFIG" --api-query "$hash" || exit 1
+    done
+}
+
+cmd_stats()
+{
+    require_bin
+    "$HYD_BIN" -c "$HYD_CONFIG" --stats
+}
+
+cmd_scan()
+{
+    require_bin
+    if ! "$HYD_BIN" -c "$HYD_CONFIG" --scan-updates; then
+        printf 'hyd: hint: the update cache may need read access; try sudo -u hyd\n' >&2
+        exit 1
+    fi
+}
+
+cmd_verify()
+{
+    require_bin
+    if ! "$HYD_BIN" -c "$HYD_CONFIG" --verify-store; then
+        printf 'hyd: hint: the store may need read access; try sudo -u hyd\n' >&2
+        exit 1
+    fi
+}
+
+cmd_version()
+{
+    require_bin
+    "$HYD_BIN" --version
+}
+
+if [ "$#" -eq 0 ]; then
+    usage
+    exit 1
+fi
+
+command=$1
+shift
+
+case "$command" in
+    sha256|--sha256)
+        cmd_hash sha256 "$@"
+        ;;
+    sha1|--sha1)
+        cmd_hash sha1 "$@"
+        ;;
+    md5|--md5)
+        cmd_hash md5 "$@"
+        ;;
+    hash)
+        cmd_hash sha256 "$@"
+        ;;
+    tag|query|--tag)
+        cmd_tag "$@"
+        ;;
+    lookup|--lookup)
+        cmd_lookup "$@"
+        ;;
+    stats|--stats)
+        cmd_stats
+        ;;
+    scan|--scan)
+        cmd_scan
+        ;;
+    verify|--verify)
+        cmd_verify
+        ;;
+    version|--version|-V)
+        cmd_version
+        ;;
+    help|--help|-h)
+        usage
+        ;;
+    *)
+        printf 'hyd: unknown command: %s\n\n' "$command" >&2
+        usage >&2
+        exit 1
+        ;;
+esac

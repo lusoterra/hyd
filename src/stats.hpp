@@ -5,6 +5,7 @@
 #include <nlohmann/json.hpp>
 
 #include <string>
+#include <string_view>
 
 namespace hyd {
 
@@ -17,5 +18,9 @@ std::string render_stats(const nlohmann::json& health, const nlohmann::json* api
 // Queries the local API and prints repository statistics. Returns a process
 // exit code.
 int run_stats(const Config& config);
+
+// Queries the local API for one file hash and prints its tags in the same
+// shape as --query. Accepts SHA-256, SHA-1, or MD5. Returns a process exit code.
+int run_api_query(const Config& config, std::string_view hash);
 
 } // namespace hyd

@@ -19,6 +19,13 @@ constexpr int kHydrusVersion = 696;
 constexpr const char* kAllKnownTagsKey = "616c6c206b6e6f776e2074616773";
 constexpr std::int64_t kSessionLifetimeSeconds = 24 * 60 * 60;
 
+bool is_loopback_address(std::string_view address)
+{
+    return address == "::1"
+        || address.rfind("127.", 0) == 0
+        || address.rfind("::ffff:127.", 0) == 0;
+}
+
 ApiResponse text_response(int status, std::string body, std::string content_type = "text/plain; charset=utf-8")
 {
     ApiResponse response;
@@ -295,6 +302,12 @@ std::string ApiHandlers::access_key_from(const ApiRequest& request, const nlohma
 
 bool ApiHandlers::authorize(const ApiRequest& request, const nlohmann::json& params, ApiResponse& failure)
 {
+    if (is_loopback_address(request.remote_address)
+        && !config_.get_bool("require_localhost_key", false))
+    {
+        return true;
+    }
+
     const std::string provided = access_key_from(request, params);
     if (provided.empty())
     {

@@ -39,6 +39,13 @@ API access key. If left empty, the key is read from
 .I access_key_file
 or generated there on first start.
 .TP
+.B require_localhost_key
+By default, loopback TCP peers (127.0.0.1, ::1) skip the API key check, and
+bogus keys are ignored too. Set this to true to require a valid access key
+from localhost as well. The check uses the socket peer, not X-Forwarded-For.
+Default false. If a public reverse proxy connects from loopback, loopback trust
+makes the read-only API public through that proxy.
+.TP
 .B service_key ", " service_key_file
 Service key reported by the API. Generated if empty.
 .TP

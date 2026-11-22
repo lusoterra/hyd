@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <ctime>
 #include <iomanip>
 #include <iostream>
@@ -199,6 +200,50 @@ std::string string_field(const nlohmann::json& document, const char* key)
         return {};
     }
     return iterator->get<std::string>();
+}
+
+std::string local_api_url(const Config& config)
+{
+    std::string host = config.listen_address();
+    if (host.empty() || host == "0.0.0.0" || host == "*")
+    {
+        host = "127.0.0.1";
+    }
+    else if (host == "::" || host == "[::]")
+    {
+        host = "[::1]";
+    }
+    else if (host.find(':') != std::string::npos && host.front() != '[')
+    {
+        host = "[" + host + "]";
+    }
+
+    return "http://" + host + ":" + std::to_string(config.listen_port());
+}
+
+std::string local_api_key(const Config& config)
+{
+    std::string key = config.get_string("access_key");
+    if (key.empty())
+    {
+        if (const char* environment = std::getenv("HYDD_API_KEY"); environment != nullptr)
+        {
+            key = environment;
+        }
+    }
+
+    if (key.empty())
+    {
+        const auto path = config.get_string(
+            "access_key_file", (config.data_dir() / "api_access_key").string());
+        std::string error;
+        if (const auto bytes = read_file(path, error))
+        {
+            key = trim(std::string(bytes->begin(), bytes->end()));
+        }
+    }
+
+    return key;
 }
 
 } // namespace
@@ -489,21 +534,7 @@ std::string render_stats(const nlohmann::json& health, const nlohmann::json* api
 
 int run_stats(const Config& config)
 {
-    std::string host = config.listen_address();
-    if (host.empty() || host == "0.0.0.0" || host == "*")
-    {
-        host = "127.0.0.1";
-    }
-    else if (host == "::" || host == "[::]")
-    {
-        host = "[::1]";
-    }
-    else if (host.find(':') != std::string::npos && host.front() != '[')
-    {
-        host = "[" + host + "]";
-    }
-
-    const std::string api_url = "http://" + host + ":" + std::to_string(config.listen_port());
+    const std::string api_url = local_api_url(config);
 
     int exit_code = 0;
     {
@@ -567,6 +598,145 @@ int run_stats(const Config& config)
                 {
                     std::cerr << "hydd: cannot render statistics: " << exception.what() << "\n";
                     exit_code = 1;
+                }
+            }
+        }
+    }
+
+    HttpClient::global_cleanup();
+    return exit_code;
+}
+
+int run_api_query(const Config& config, std::string_view hash)
+{
+    if (!hash_bytes_from_hex(hash))
+    {
+        std::cerr << "hydd: invalid file hash (expected sha256, sha1, or md5)\n";
+        return 2;
+    }
+
+    const std::string api_url = local_api_url(config);
+    const std::string key = local_api_key(config);
+
+    int exit_code = 0;
+    {
+        HttpClient client(api_url, std::string(), "hydd-query");
+        client.set_timeout_seconds(10);
+        client.set_retries(0);
+        if (!key.empty())
+        {
+            client.set_api_access_key(key);
+        }
+
+        HttpResponse response;
+        std::string error;
+        const std::string path = "/get_files/file_metadata?hashes=" + std::string(hash);
+
+        if (!client.get(path, response, error))
+        {
+            if (error.rfind("HTTP 401", 0) == 0 || error.rfind("HTTP 403", 0) == 0)
+            {
+                std::cerr << "hydd: the API at " << api_url << " requires an access key.\n";
+                std::cerr << "run as the hyd user, set HYDD_API_KEY, or set "
+                             "require_localhost_key = false to trust localhost\n";
+            }
+            else
+            {
+                std::cerr << "hydd: cannot reach the API at " << api_url << ": " << error << "\n";
+            }
+            exit_code = 1;
+        }
+        else
+        {
+            const std::string body(response.body.begin(), response.body.end());
+            auto document = nlohmann::json::parse(body, nullptr, false);
+            if (document.is_discarded() || !document.is_object()
+                || !document.contains("metadata") || !document["metadata"].is_array()
+                || document["metadata"].empty())
+            {
+                std::cerr << "hydd: the API at " << api_url << " returned an unexpected response\n";
+                exit_code = 1;
+            }
+            else
+            {
+                const auto& row = document["metadata"].front();
+                if (!row.contains("file_id") || row["file_id"].is_null())
+                {
+                    std::cout << "not found\n";
+                }
+                else
+                {
+                    std::cout << "file_id " << row["file_id"].dump() << "\n";
+
+                    const auto tags_iterator = row.find("tags");
+                    if (tags_iterator != row.end() && tags_iterator->is_object())
+                    {
+                        const nlohmann::json* service = nullptr;
+                        for (auto iterator = tags_iterator->begin();
+                            iterator != tags_iterator->end(); ++iterator)
+                        {
+                            if (iterator->is_object() && iterator->value("type", -1) == 0)
+                            {
+                                service = &(*iterator);
+                                break;
+                            }
+                        }
+                        if (service == nullptr)
+                        {
+                            for (auto iterator = tags_iterator->begin();
+                                iterator != tags_iterator->end(); ++iterator)
+                            {
+                                if (iterator->is_object())
+                                {
+                                    service = &(*iterator);
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (service != nullptr)
+                        {
+                            auto print_tags = [](const char* label, const nlohmann::json& value) {
+                                std::cout << label << "\n";
+                                if (!value.is_object())
+                                {
+                                    return;
+                                }
+                                for (auto group = value.begin(); group != value.end(); ++group)
+                                {
+                                    if (!group->is_array())
+                                    {
+                                        continue;
+                                    }
+                                    for (const auto& tag : *group)
+                                    {
+                                        if (tag.is_string())
+                                        {
+                                            std::cout << "\t" << tag.get<std::string>() << "\n";
+                                        }
+                                    }
+                                }
+                            };
+
+                            if (service->contains("storage_tags"))
+                            {
+                                print_tags("storage_tags", (*service)["storage_tags"]);
+                            }
+                            else
+                            {
+                                std::cout << "storage_tags\n";
+                            }
+
+                            if (service->contains("display_tags"))
+                            {
+                                print_tags("display_tags", (*service)["display_tags"]);
+                            }
+                            else
+                            {
+                                std::cout << "display_tags\n";
+                            }
+                        }
+                    }
                 }
             }
         }
