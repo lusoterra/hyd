@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# hyd - small helper for a hydd read-only PTR mirror.
+# hyd - query a hydd read-only PTR mirror.
 #
-# Hash files portably, then look their tags up through the running daemon's
-# API (hydd --api-query). Set HYD_BIN or HYD_CONFIG to override the defaults.
+#   hyd [--sha256|--sha1|--md5] FILE   hash FILE and query its tags
+#   hyd HASH                           query a SHA-256, SHA-1, or MD5 hash
+#   hyd stats|scan|verify|version
+#
+# Set HYD_BIN or HYD_CONFIG to override the defaults.
 
 set -u
 
@@ -12,29 +15,28 @@ HYD_CONFIG=${HYD_CONFIG:-/etc/hydd.conf}
 usage()
 {
     cat <<'EOF'
-usage: hyd COMMAND [ARG...]
+usage: hyd [--sha256|--sha1|--md5] FILE|HASH
+       hyd stats
+       hyd scan
+       hyd verify
+       hyd version
 
-Commands:
-  sha256 FILE...      print the SHA-256 hash of each file
-  sha1 FILE...        print the SHA-1 hash of each file
-  md5 FILE...         print the MD5 hash of each file
-  hash FILE...        alias for sha256
-  tag FILE...         print the PTR tags for each file
-  query FILE...       alias for tag
-  lookup HASH...      print the tags for one or more hashes
-  stats               show daemon, repository and build statistics
-  scan                parse every cached update file and report problems
-  verify              open and validate the local store
-  version             print the hydd version
+Arguments:
+  FILE       Hash the file (SHA-256 by default) and query it.
+  HASH       Query a 64-character SHA-256, 40-character SHA-1, or
+             32-character MD5 hash directly.
 
-  --sha256/--sha1/--md5/--tag/--lookup/--stats/--scan/--verify are aliases
-  for the matching commands.
+Options:
+  --sha256   Hash FILE with SHA-256 (default).
+  --sha1     Hash FILE with SHA-1.
+  --md5      Hash FILE with MD5.
+  -h, --help Show usage.
 
 Environment:
-  HYD_BIN             hydd executable (default: hydd)
-  HYD_CONFIG          config file (default: /etc/hydd.conf)
+  HYD_BIN     hydd executable (default: hydd)
+  HYD_CONFIG  config file (default: /etc/hydd.conf)
 
-The tag/lookup commands use the local API, so the daemon must be running.
+The query commands use the local API, so the daemon must be running.
 Loopback requests are trusted by default. If the daemon sets
 require_localhost_key = true, run as the hyd user or set HYDD_API_KEY.
 EOF
@@ -102,34 +104,21 @@ hash_file()
     esac
 }
 
-cmd_hash()
+is_hex()
 {
-    algo=$1
-    shift
-    [ "$#" -gt 0 ] || fail "no files given"
-    for file in "$@"; do
-        hash_file "$algo" "$file" || exit 1
-    done
+    case "$1" in
+        *[!0-9a-fA-F]*) return 1 ;;
+    esac
+    return 0
 }
 
-cmd_lookup()
+is_hash()
 {
-    require_bin
-    [ "$#" -gt 0 ] || fail "no hashes given"
-    for hash in "$@"; do
-        "$HYD_BIN" -c "$HYD_CONFIG" --api-query "$hash" || exit 1
-    done
-}
-
-cmd_tag()
-{
-    require_bin
-    [ "$#" -gt 0 ] || fail "no files given"
-    for file in "$@"; do
-        hash=$(hash_file sha256 "$file") || exit 1
-        printf '# %s\n' "$file"
-        "$HYD_BIN" -c "$HYD_CONFIG" --api-query "$hash" || exit 1
-    done
+    length=${#1}
+    if [ "$length" -ne 64 ] && [ "$length" -ne 40 ] && [ "$length" -ne 32 ]; then
+        return 1
+    fi
+    is_hex "$1"
 }
 
 cmd_stats()
@@ -159,7 +148,13 @@ cmd_verify()
 cmd_version()
 {
     require_bin
-    "$HYD_BIN" --version
+    version_output=$("$HYD_BIN" --version)
+    case "$version_output" in
+        hyd\ v*) printf '%s\n' "$version_output" ;;
+        hydd\ *) printf 'hyd v%s\n' "${version_output#hydd }" ;;
+        hyd\ *) printf 'hyd v%s\n' "${version_output#hyd }" ;;
+        *) printf 'hyd v%s\n' "$version_output" ;;
+    esac
 }
 
 if [ "$#" -eq 0 ]; then
@@ -167,46 +162,73 @@ if [ "$#" -eq 0 ]; then
     exit 1
 fi
 
-command=$1
-shift
-
-case "$command" in
-    sha256|--sha256)
-        cmd_hash sha256 "$@"
-        ;;
-    sha1|--sha1)
-        cmd_hash sha1 "$@"
-        ;;
-    md5|--md5)
-        cmd_hash md5 "$@"
-        ;;
-    hash)
-        cmd_hash sha256 "$@"
-        ;;
-    tag|query|--tag)
-        cmd_tag "$@"
-        ;;
-    lookup|--lookup)
-        cmd_lookup "$@"
-        ;;
-    stats|--stats)
+case "$1" in
+    stats)
         cmd_stats
+        exit 0
         ;;
-    scan|--scan)
+    scan)
         cmd_scan
+        exit 0
         ;;
-    verify|--verify)
+    verify)
         cmd_verify
+        exit 0
         ;;
     version|--version|-V)
         cmd_version
+        exit 0
         ;;
-    help|--help|-h)
+    help|-h|--help)
         usage
-        ;;
-    *)
-        printf 'hyd: unknown command: %s\n\n' "$command" >&2
-        usage >&2
-        exit 1
+        exit 0
         ;;
 esac
+
+algo=sha256
+argument=
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --sha256)
+            algo=sha256
+            ;;
+        --sha1)
+            algo=sha1
+            ;;
+        --md5)
+            algo=md5
+            ;;
+        -*)
+            fail "unknown option: $1"
+            ;;
+        *)
+            [ -z "$argument" ] || fail "only one file or hash is supported"
+            argument=$1
+            ;;
+    esac
+    shift
+done
+
+[ -n "$argument" ] || fail "no file or hash given"
+
+if is_hash "$argument"; then
+    if [ -f "$argument" ]; then
+        fail "ambiguous argument: '$argument' is both a hash and an existing file; use ./$argument for the file"
+    fi
+    target_hash=$argument
+    header=
+elif [ -f "$argument" ]; then
+    target_hash=$(hash_file "$algo" "$argument") || exit 1
+    header="# $argument ($algo $target_hash)"
+else
+    fail "not a file or a SHA-256, SHA-1, or MD5 hash: $argument"
+fi
+
+require_bin
+
+if [ -n "$header" ]; then
+    printf '%s\n' "$header"
+fi
+
+"$HYD_BIN" -c "$HYD_CONFIG" --api-query "$target_hash"

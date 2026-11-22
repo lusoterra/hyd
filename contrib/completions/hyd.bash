@@ -5,19 +5,19 @@ _hyd()
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
 
-    local commands="sha256 sha1 md5 hash tag query lookup stats scan verify version help"
-    local flags="--sha256 --sha1 --md5 --tag --lookup --stats --scan --verify --version --help"
+    local commands="stats scan verify version help"
+    local flags="--sha256 --sha1 --md5 --help --version"
 
     if [ "${COMP_CWORD}" -eq 1 ]; then
-        COMPREPLY=( $(compgen -W "${commands} ${flags}" -- "${cur}") )
+        COMPREPLY=( $(compgen -W "${commands} ${flags}" -- "${cur}") $(compgen -f -- "${cur}") )
         return 0
     fi
 
     case "${COMP_WORDS[1]}" in
-        sha256|sha1|md5|hash|tag|query|--sha256|--sha1|--md5|--tag)
-            COMPREPLY=( $(compgen -f -- "${cur}") )
+        stats|scan|verify|version|help)
             ;;
         *)
+            COMPREPLY=( $(compgen -f -- "${cur}") )
             ;;
     esac
     return 0

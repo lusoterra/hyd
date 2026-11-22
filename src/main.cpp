@@ -187,7 +187,7 @@ std::optional<Options> parse_options(int argc, char** argv, std::string& error)
                 print_help();
                 exit(0);
             case 'V':
-                std::cout << "hydd " << kVersion << "\n";
+                std::cout << "hyd v" << kVersion << "\n";
                 exit(0);
             default:
                 error = "invalid option; use --help";

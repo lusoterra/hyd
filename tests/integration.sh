@@ -110,7 +110,8 @@ curl -s "http://127.0.0.1:${PORT_API}/stats" | grep -q '"phase":"idle"'
 KEY=2222222222222222222222222222222222222222222222222222222222222222
 KEY2=3333333333333333333333333333333333333333333333333333333333333333
 BASE="http://127.0.0.1:${PORT_API}"
-VERSION=$("${BIN}" --version | awk '{print $2}')
+VERSION=$("${BIN}" --version | awk '{print $2}' | sed 's/^v//')
+[ "$("${BIN}" --version)" = "hyd v${VERSION}" ]
 curl -s "${BASE}/api_version" | grep -q "\"hyd_version\":\"${VERSION}\""
 
 KEYS=$("${BIN}" -c "${WORK}/hydd.conf" --print-access-key)
@@ -128,12 +129,23 @@ echo "${OUT}" | grep -q 'series:alpha'
 [ ! -e "${WORK}/api-query-no-data" ]
 
 printf 'alpha-file' > "${WORK}/alpha-file"
-HELPER_HASH=$(HYD_BIN="${BIN}" HYD_CONFIG="${WORK}/hydd.conf" \
-    "${ROOT}/contrib/hyd" sha256 "${WORK}/alpha-file")
-[ "${HELPER_HASH}" = "${H1}" ]
+printf 'legacy-file' > "${WORK}/legacy-file"
+
 HELPER_TAGS=$(HYD_BIN="${BIN}" HYD_CONFIG="${WORK}/hydd.conf" \
-    "${ROOT}/contrib/hyd" tag "${WORK}/alpha-file")
+    "${ROOT}/contrib/hyd" "${WORK}/alpha-file")
+echo "${HELPER_TAGS}" | grep -q "sha256 ${H1}"
 echo "${HELPER_TAGS}" | grep -q 'series:alpha'
+
+HELPER_TAGS=$(HYD_BIN="${BIN}" HYD_CONFIG="${WORK}/hydd.conf" \
+    "${ROOT}/contrib/hyd" --sha1 "${WORK}/legacy-file")
+echo "${HELPER_TAGS}" | grep -q 'series:alpha'
+
+HELPER_TAGS=$(HYD_BIN="${BIN}" HYD_CONFIG="${WORK}/hydd.conf" \
+    "${ROOT}/contrib/hyd" "${H1}")
+echo "${HELPER_TAGS}" | grep -q 'series:alpha'
+
+[ "$(HYD_BIN="${BIN}" HYD_CONFIG="${WORK}/hydd.conf" \
+    "${ROOT}/contrib/hyd" version)" = "hyd v${VERSION}" ]
 
 BODY=$(curl -s -X POST -H 'Content-Type: application/json' \
     -H "Hydrus-Client-API-Access-Key: ${KEY}" \
