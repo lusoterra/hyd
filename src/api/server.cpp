@@ -14,12 +14,17 @@
 
 #include <thread>
 
+#ifndef HYDD_VERSION
+#define HYDD_VERSION "0.0.0"
+#endif
+
 namespace hyd {
 
 namespace {
 
 constexpr std::size_t kMaxHeaderBytes = 2 * 1024 * 1024;
 constexpr std::size_t kMaxBodyBytes = 16 * 1024 * 1024;
+constexpr const char* kServerBanner = "hydd/" HYDD_VERSION;
 
 std::string lower(std::string_view value)
 {
@@ -98,8 +103,11 @@ bool send_all(int fd, const char* data, std::size_t size)
 
 } // namespace
 
-ApiServer::ApiServer(std::string address, int port, ApiHandler handler)
-    : address_(std::move(address)), port_(port), handler_(std::move(handler))
+ApiServer::ApiServer(std::string address, int port, std::size_t max_connections, ApiHandler handler)
+    : address_(std::move(address)),
+      port_(port),
+      max_connections_(max_connections == 0 ? kDefaultMaxConcurrent : max_connections),
+      handler_(std::move(handler))
 {
 }
 
@@ -215,10 +223,10 @@ void ApiServer::handle_connection(int socket_fd, std::string remote_address)
         ~Guard() { count_.fetch_sub(1); }
     } guard { active_ };
 
-    if (active > kMaxConcurrent)
+    if (active > static_cast<int>(max_connections_))
     {
         const std::string response =
-            "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            "HTTP/1.1 503 Service Unavailable\r\nRetry-After: 5\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
         send_all(socket_fd, response.data(), response.size());
         ::shutdown(socket_fd, SHUT_RDWR);
         return;
@@ -352,10 +360,10 @@ void ApiServer::handle_connection(int socket_fd, std::string remote_address)
 
     if (parsed.method == "OPTIONS")
     {
-        const std::string response =
+        std::string response =
             "HTTP/1.1 200 OK\r\n"
-            "Server: hydd/0.2\r\n"
-            "Hydrus-Server: hydd/0.2\r\n"
+            "Server: " + std::string(kServerBanner) + "\r\n"
+            "Hydrus-Server: " + std::string(kServerBanner) + "\r\n"
             "Access-Control-Allow-Origin: *\r\n"
             "Access-Control-Allow-Headers: *\r\n"
             "Access-Control-Allow-Methods: GET, POST\r\n"
@@ -411,11 +419,15 @@ void ApiServer::handle_connection(int socket_fd, std::string remote_address)
 
     std::string head;
     head += "HTTP/1.1 " + std::to_string(response.status) + " " + status_text(response.status) + "\r\n";
-    head += "Server: hydd/0.2\r\n";
-    head += "Hydrus-Server: hydd/0.2\r\n";
+    head += "Server: " + std::string(kServerBanner) + "\r\n";
+    head += "Hydrus-Server: " + std::string(kServerBanner) + "\r\n";
     head += "Access-Control-Allow-Origin: *\r\n";
     head += "Access-Control-Allow-Headers: *\r\n";
     head += "Access-Control-Allow-Methods: GET, POST\r\n";
+    for (const auto& [name, value] : response.headers)
+    {
+        head += name + ": " + value + "\r\n";
+    }
     head += "Content-Type: " + response.content_type + "\r\n";
     head += "Content-Length: " + std::to_string(response.body.size()) + "\r\n";
     head += "Connection: close\r\n";

@@ -399,6 +399,167 @@ bool write_partition_maps(const std::filesystem::path& path,
     return write_file_atomic(path, data, error);
 }
 
+// --- derived tag metadata (counts + name lookup) -------------------------
+
+bool write_tag_counts(const std::filesystem::path& path,
+    const std::vector<std::uint32_t>& counts, std::int64_t built_at, std::string& error)
+{
+    Bytes data;
+    data.resize(kTagCountsHeader + counts.size() * 4);
+    std::memcpy(data.data(), kTagCountsMagic, 8);
+    write_u32(data.data() + 8, kTagCountsFormat);
+    write_u32(data.data() + 12, static_cast<std::uint32_t>(counts.size()));
+    write_u32(data.data() + 16, 0);
+    write_u64(data.data() + 20, static_cast<std::uint64_t>(built_at));
+    if (!counts.empty())
+    {
+        std::memcpy(data.data() + kTagCountsHeader, counts.data(), counts.size() * 4);
+    }
+
+    return write_file_atomic(path, data, error);
+}
+
+bool write_tag_lookup(const std::filesystem::path& path,
+    std::vector<std::pair<std::uint32_t, std::uint32_t>>& rows, std::string& error)
+{
+    std::sort(rows.begin(), rows.end());
+
+    Bytes data;
+    data.resize(kTagLookupHeader + rows.size() * 8);
+    std::memcpy(data.data(), kTagLookupMagic, 8);
+    write_u32(data.data() + 8, kTagLookupFormat);
+    write_u32(data.data() + 12, static_cast<std::uint32_t>(rows.size()));
+    write_u32(data.data() + 16, 0);
+    if (!rows.empty())
+    {
+        std::memcpy(data.data() + kTagLookupHeader, rows.data(), rows.size() * 8);
+    }
+
+    return write_file_atomic(path, data, error);
+}
+
+// Reads every tag definition from every manifested segment, plus any tags
+// that only exist in the pending delta, and produces (name hash, tag id)
+// rows for the tag-name lookup.
+bool collect_tag_lookup(const std::filesystem::path& store_dir, const StoreManifest& manifest,
+    const std::unordered_map<std::uint32_t, std::string>& extra_tags,
+    std::vector<std::pair<std::uint32_t, std::uint32_t>>& rows, std::string& error)
+{
+    rows.clear();
+    rows.reserve(manifest.tag_count + extra_tags.size());
+
+    for (const auto& segment : manifest.tag_segments)
+    {
+        std::string read_error;
+        auto ids = read_file(store_dir / segment.ids_path, read_error);
+        if (!ids)
+        {
+            error = "cannot read tag segment ids: " + read_error;
+            return false;
+        }
+        auto index = read_file(store_dir / segment.idx_path, read_error);
+        if (!index)
+        {
+            error = "cannot read tag segment index: " + read_error;
+            return false;
+        }
+        auto strings = read_file(store_dir / segment.str_path, read_error);
+        if (!strings)
+        {
+            error = "cannot read tag segment strings: " + read_error;
+            return false;
+        }
+        if (ids->size() < segment.count * 4 || index->size() < segment.count * 12)
+        {
+            error = "tag segment is truncated: " + segment.ids_path;
+            return false;
+        }
+
+        for (std::uint64_t i = 0; i < segment.count; ++i)
+        {
+            const auto* index_row = index->data() + i * 12;
+            const std::uint64_t begin = read_u64(index_row);
+            const std::uint32_t length = read_u32(index_row + 8);
+            if (begin > strings->size() || length > strings->size() - begin)
+            {
+                error = "tag segment string is out of range: " + segment.str_path;
+                return false;
+            }
+            const std::string_view text(
+                reinterpret_cast<const char*>(strings->data() + begin), length);
+            rows.emplace_back(tag_name_hash(text), read_u32(ids->data() + i * 4));
+        }
+    }
+
+    for (const auto& [tag_id, text] : extra_tags)
+    {
+        rows.emplace_back(tag_name_hash(text), tag_id);
+    }
+
+    return true;
+}
+
+void add_mapping_counts(const std::unordered_map<std::uint32_t, std::vector<std::uint32_t>>& mappings,
+    std::vector<std::uint32_t>& counts)
+{
+    for (const auto& [hash_id, tags] : mappings)
+    {
+        (void)hash_id;
+        for (const auto tag_id : tags)
+        {
+            if (static_cast<std::size_t>(tag_id) < counts.size())
+            {
+                ++counts[tag_id];
+            }
+        }
+    }
+}
+
+// Adds the counts of one already-written base partition to `counts`. Used
+// when an interrupted initial build resumes: the partitions finished before
+// the interruption still contribute to the totals.
+bool add_partition_counts(const std::filesystem::path& partition_dir,
+    std::vector<std::uint32_t>& counts, std::string& error)
+{
+    auto bytes = read_file(partition_dir / "maps.bin", error);
+    if (!bytes)
+    {
+        return false;
+    }
+    if (bytes->size() < 20)
+    {
+        error = "maps.bin is truncated in " + partition_dir.string();
+        return false;
+    }
+    const auto* data = bytes->data();
+    if (std::memcmp(data, kMapsMagic, 8) != 0)
+    {
+        error = "bad maps.bin magic in " + partition_dir.string();
+        return false;
+    }
+    const std::uint32_t map_count = read_u32(data + 8);
+    const std::uint32_t tag_count = read_u32(data + 12);
+    const std::size_t expected = 20 + static_cast<std::size_t>(map_count) * 4
+        + (static_cast<std::size_t>(map_count) + 1) * 8
+        + static_cast<std::size_t>(tag_count) * 4;
+    if (bytes->size() < expected)
+    {
+        error = "maps.bin has an invalid count in " + partition_dir.string();
+        return false;
+    }
+    const auto* tags = data + 20 + static_cast<std::size_t>(map_count) * 4
+        + (static_cast<std::size_t>(map_count) + 1) * 8;
+    for (std::uint32_t i = 0; i < tag_count; ++i)
+    {
+        const auto tag_id = read_u32(tags + static_cast<std::size_t>(i) * 4);
+        if (static_cast<std::size_t>(tag_id) < counts.size())
+        {
+            ++counts[tag_id];
+        }
+    }
+    return true;
+}
+
 bool write_pairs(const std::filesystem::path& path,
     const std::unordered_map<std::uint32_t, std::vector<std::uint32_t>>& parents, std::string& error)
 {
@@ -1555,6 +1716,36 @@ bool build_initial_store(const Config& config, const RepositoryMetadata& metadat
         stats.mapping_count = checkpoint.mapping_count;
     }
 
+    // Derived tag metadata. Counts are kept in memory while the base store is
+    // written and flushed once at the end; a resumed build folds in the
+    // partitions that were already completed.
+    const bool tag_counts_enabled = config.get_bool("tag_counts_enabled", true);
+    std::vector<std::uint32_t> tag_counts;
+    if (tag_counts_enabled)
+    {
+        tag_counts.assign(static_cast<std::size_t>(stats.tag_last) + 1, 0);
+
+        if (resume && checkpoint.completed_partitions > 0)
+        {
+            HYD_LOGF(info, "initial sync: re-reading %llu completed partitions for tag counts",
+                static_cast<unsigned long long>(checkpoint.completed_partitions));
+            for (std::size_t p = 0; p < checkpoint.completed_partitions; ++p)
+            {
+                if (stopped(callbacks))
+                {
+                    error = "stopped";
+                    return false;
+                }
+                char name[32];
+                std::snprintf(name, sizeof(name), "p%02zu", p);
+                if (!add_partition_counts(store_dir / name, tag_counts, error))
+                {
+                    return false;
+                }
+            }
+        }
+    }
+
     std::uint64_t content_total_files = 0;
     std::uint64_t content_total_bytes = 0;
     for (std::size_t i = 0; i < sources.size(); ++i)
@@ -1809,6 +2000,10 @@ bool build_initial_store(const Config& config, const RepositoryMetadata& metadat
             (void)hash_id;
             stats.mapping_count += tags.size();
         }
+        if (tag_counts_enabled)
+        {
+            add_mapping_counts(mappings, tag_counts);
+        }
 
         if (p == 0)
         {
@@ -1916,6 +2111,29 @@ bool build_initial_store(const Config& config, const RepositoryMetadata& metadat
     if (!save_store_manifest(store_dir, manifest, error))
     {
         return false;
+    }
+
+    if (tag_counts_enabled)
+    {
+        if (!write_tag_counts(store_dir / "counts.bin", tag_counts, manifest.built_at, error))
+        {
+            return false;
+        }
+
+        std::vector<std::pair<std::uint32_t, std::uint32_t>> lookup;
+        if (!collect_tag_lookup(store_dir, manifest, std::unordered_map<std::uint32_t, std::string> {},
+                lookup, error))
+        {
+            return false;
+        }
+        if (!write_tag_lookup(store_dir / "tag_lookup.bin", lookup, error))
+        {
+            return false;
+        }
+
+        HYD_LOGF(info, "tag metadata built: %zu counts (%s), %zu tag names (%s)",
+            tag_counts.size(), human_bytes(tag_counts.size() * 4).c_str(), lookup.size(),
+            human_bytes(lookup.size() * 8).c_str());
     }
 
     state.built = true;
@@ -2703,8 +2921,171 @@ std::uint64_t delta_bytes_on_disk(const Config& config)
     return total;
 }
 
-bool compact_store(const Config& config, const SyncCallbacks& callbacks, SyncState& state, std::string& error)
+bool rebuild_tag_metadata(const Config& config, const SyncCallbacks& callbacks, std::string& error)
 {
+    const auto store_dir = config.store_dir();
+    const auto partitions = static_cast<std::size_t>(config.partitions());
+
+    StoreManifest manifest;
+    if (!load_store_manifest(store_dir, manifest, error))
+    {
+        return false;
+    }
+
+    std::uint32_t max_tag_id = 0;
+    for (const auto& segment : manifest.tag_segments)
+    {
+        if (segment.count > 0)
+        {
+            max_tag_id = std::max(max_tag_id, static_cast<std::uint32_t>(segment.last));
+        }
+    }
+
+    HYD_LOGF(info, "rebuilding tag metadata: scanning %zu partitions for %u tag ids",
+        partitions, max_tag_id + 1);
+
+    std::vector<std::uint32_t> tag_counts(static_cast<std::size_t>(max_tag_id) + 1, 0);
+    for (std::size_t p = 0; p < partitions; ++p)
+    {
+        if (stopped(callbacks))
+        {
+            error = "stopped";
+            return false;
+        }
+        char name[32];
+        std::snprintf(name, sizeof(name), "p%02zu", p);
+        if (!add_partition_counts(store_dir / name, tag_counts, error))
+        {
+            return false;
+        }
+        HYD_LOGF(debug, "tag metadata: partition %zu/%zu scanned", p + 1, partitions);
+    }
+
+    if (!write_tag_counts(store_dir / "counts.bin", tag_counts, now_unix(), error))
+    {
+        return false;
+    }
+
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> lookup;
+    if (!collect_tag_lookup(store_dir, manifest, std::unordered_map<std::uint32_t, std::string> {},
+            lookup, error))
+    {
+        return false;
+    }
+    if (!write_tag_lookup(store_dir / "tag_lookup.bin", lookup, error))
+    {
+        return false;
+    }
+
+    HYD_LOGF(info, "tag metadata rebuilt: %zu counts (%s), %zu tag names (%s)",
+        tag_counts.size(), human_bytes(tag_counts.size() * 4).c_str(), lookup.size(),
+        human_bytes(lookup.size() * 8).c_str());
+
+    return true;
+}
+
+bool check_tag_metadata(const Config& config, const SyncCallbacks& callbacks,
+    TagMetadataCheck& result, std::string& error)
+{
+    const auto store_dir = config.store_dir();
+    const auto partitions = static_cast<std::size_t>(config.partitions());
+
+    StoreManifest manifest;
+    if (!load_store_manifest(store_dir, manifest, error))
+    {
+        return false;
+    }
+
+    std::uint32_t max_tag_id = 0;
+    for (const auto& segment : manifest.tag_segments)
+    {
+        if (segment.count > 0)
+        {
+            max_tag_id = std::max(max_tag_id, static_cast<std::uint32_t>(segment.last));
+        }
+    }
+
+    std::vector<std::uint32_t> counts(static_cast<std::size_t>(max_tag_id) + 1, 0);
+    for (std::size_t p = 0; p < partitions; ++p)
+    {
+        if (stopped(callbacks))
+        {
+            error = "stopped";
+            return false;
+        }
+        char name[32];
+        std::snprintf(name, sizeof(name), "p%02zu", p);
+        if (!add_partition_counts(store_dir / name, counts, error))
+        {
+            return false;
+        }
+    }
+
+    result = TagMetadataCheck {};
+    result.tag_ids = counts.size();
+    result.expected_lookup_entries = manifest.tag_count;
+
+    auto stored = read_file(store_dir / "counts.bin", error);
+    if (!stored)
+    {
+        return false;
+    }
+    if (stored->size() < kTagCountsHeader
+        || std::memcmp(stored->data(), kTagCountsMagic, 8) != 0
+        || read_u32(stored->data() + 8) != kTagCountsFormat)
+    {
+        error = "counts.bin has a bad header";
+        return false;
+    }
+    const std::uint32_t stored_len = read_u32(stored->data() + 12);
+    if (stored_len != counts.size()
+        || stored->size() < kTagCountsHeader + static_cast<std::size_t>(stored_len) * 4)
+    {
+        error = "counts.bin has an unexpected tag count";
+        return false;
+    }
+
+    std::size_t reported = 0;
+    for (std::size_t i = 0; i < counts.size(); ++i)
+    {
+        const auto value = read_u32(stored->data() + kTagCountsHeader + i * 4);
+        ++result.checked;
+        if (value != counts[i])
+        {
+            ++result.mismatches;
+            if (reported < 10)
+            {
+                HYD_LOGF(warn, "tag count mismatch at tag id %zu: stored %u, actual %u",
+                    i, value, counts[i]);
+                ++reported;
+            }
+        }
+    }
+
+    const auto lookup_path = store_dir / "tag_lookup.bin";
+    if (!path_exists(lookup_path))
+    {
+        error = "tag_lookup.bin is missing";
+        return false;
+    }
+    auto lookup = read_file(lookup_path, error);
+    if (!lookup)
+    {
+        return false;
+    }
+    if (lookup->size() < kTagLookupHeader
+        || std::memcmp(lookup->data(), kTagLookupMagic, 8) != 0
+        || read_u32(lookup->data() + 8) != kTagLookupFormat)
+    {
+        error = "tag_lookup.bin has a bad header";
+        return false;
+    }
+    result.lookup_entries = read_u32(lookup->data() + 12);
+
+    return true;
+}
+
+bool compact_store(const Config& config, const SyncCallbacks& callbacks, SyncState& state, std::string& error){
     const auto store_dir = config.store_dir();
     const auto state_dir = config.state_dir();
     const auto partitions = static_cast<std::size_t>(config.partitions());
@@ -2819,6 +3200,21 @@ bool compact_store(const Config& config, const SyncCallbacks& callbacks, SyncSta
             ids_name,
         });
         manifest.tag_count += writer.count;
+    }
+
+    const bool tag_counts_enabled = config.get_bool("tag_counts_enabled", true);
+    std::vector<std::uint32_t> tag_counts;
+    if (tag_counts_enabled)
+    {
+        std::uint32_t max_tag_id = 0;
+        for (const auto& segment : manifest.tag_segments)
+        {
+            if (segment.count > 0)
+            {
+                max_tag_id = std::max(max_tag_id, static_cast<std::uint32_t>(segment.last));
+            }
+        }
+        tag_counts.assign(static_cast<std::size_t>(max_tag_id) + 1, 0);
     }
 
     // Merge tag pairs.
@@ -2990,6 +3386,10 @@ bool compact_store(const Config& config, const SyncCallbacks& callbacks, SyncSta
             tag_ids.erase(std::unique(tag_ids.begin(), tag_ids.end()), tag_ids.end());
             mapping_count += tag_ids.size();
         }
+        if (tag_counts_enabled)
+        {
+            add_mapping_counts(mappings, tag_counts);
+        }
 
         hash_count += hashes.size();
 
@@ -3016,6 +3416,43 @@ bool compact_store(const Config& config, const SyncCallbacks& callbacks, SyncSta
     if (!save_store_manifest(store_dir, manifest, error))
     {
         return false;
+    }
+
+    if (tag_counts_enabled)
+    {
+        // Counts are written after the manifest: if we crash in between, the
+        // old counts plus the still-present delta journal still produce the
+        // right answer, because the delta overlay in Store::open is
+        // idempotent.
+        if (!write_tag_counts(store_dir / "counts.bin", tag_counts, now_unix(), error))
+        {
+            return false;
+        }
+
+        std::vector<std::pair<std::uint32_t, std::uint32_t>> lookup;
+        if (!new_tags.empty() || !path_exists(store_dir / "tag_lookup.bin"))
+        {
+            if (!collect_tag_lookup(store_dir, manifest, delta.tags, lookup, error))
+            {
+                return false;
+            }
+            if (!write_tag_lookup(store_dir / "tag_lookup.bin", lookup, error))
+            {
+                return false;
+            }
+        }
+
+        if (!lookup.empty())
+        {
+            HYD_LOGF(info, "tag metadata rebuilt: %zu counts (%s), %zu tag names (%s)",
+                tag_counts.size(), human_bytes(tag_counts.size() * 4).c_str(), lookup.size(),
+                human_bytes(lookup.size() * 8).c_str());
+        }
+        else
+        {
+            HYD_LOGF(info, "tag counts rebuilt: %zu entries (%s)", tag_counts.size(),
+                human_bytes(tag_counts.size() * 4).c_str());
+        }
     }
 
     // Remove merged delta files only after the new manifest is durable.

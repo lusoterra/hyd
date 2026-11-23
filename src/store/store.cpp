@@ -159,8 +159,189 @@ struct Store::Impl
     const std::uint8_t* legacy_entries = nullptr;
     std::uint32_t legacy_count = 0;
 
+    MappedFile counts;
+    const std::uint8_t* count_entries = nullptr;
+    std::uint32_t count_len = 0;
+    std::int64_t counts_built_at = 0;
+
+    MappedFile tag_lookup;
+    const std::uint8_t* lookup_entries = nullptr;
+    std::uint32_t lookup_count = 0;
+
+    // Pending-delta adjustments to the base counts (tag id -> -N..+N).
+    std::unordered_map<std::uint32_t, std::int32_t> count_overlay;
+
     std::unordered_map<std::uint32_t, std::uint32_t> siblings;
     std::unordered_map<std::uint32_t, std::vector<std::uint32_t>> parents;
+
+    const PartitionFiles* find_partition_with_hash(std::uint32_t hash_id) const
+    {
+        for (const auto& files : partitions)
+        {
+            const std::uint8_t* ids = files.map_hash_ids;
+            std::size_t low = 0;
+            std::size_t high = files.map_count;
+            while (low < high)
+            {
+                const std::size_t middle = low + (high - low) / 2;
+                if (read_u32(ids + middle * 4) < hash_id)
+                {
+                    low = middle + 1;
+                }
+                else
+                {
+                    high = middle;
+                }
+            }
+            if (low < files.map_count && read_u32(ids + low * 4) == hash_id)
+            {
+                return &files;
+            }
+        }
+        return nullptr;
+    }
+
+    void collect_base_tags(std::uint32_t hash_id, std::vector<std::uint32_t>& tags) const
+    {
+        tags.clear();
+        const auto* files = find_partition_with_hash(hash_id);
+        if (files == nullptr)
+        {
+            return;
+        }
+        const std::uint8_t* ids = files->map_hash_ids;
+        std::size_t low = 0;
+        std::size_t high = files->map_count;
+        while (low < high)
+        {
+            const std::size_t middle = low + (high - low) / 2;
+            if (read_u32(ids + middle * 4) < hash_id)
+            {
+                low = middle + 1;
+            }
+            else
+            {
+                high = middle;
+            }
+        }
+        if (low >= files->map_count)
+        {
+            return;
+        }
+        const std::uint64_t begin = read_u64(files->map_offsets + low * 8);
+        const std::uint64_t end = read_u64(files->map_offsets + (low + 1) * 8);
+        if (begin > end || end > files->map_tag_count)
+        {
+            return;
+        }
+        tags.reserve(static_cast<std::size_t>(end - begin));
+        for (std::uint64_t i = begin; i < end; ++i)
+        {
+            tags.push_back(read_u32(files->map_tags + i * 4));
+        }
+    }
+
+    void build_count_overlay(const DeltaData& delta)
+    {
+        count_overlay.clear();
+        if (count_entries == nullptr)
+        {
+            return;
+        }
+
+        auto adjust = [this](std::uint32_t tag_id, std::int32_t change) {
+            count_overlay[tag_id] += change;
+        };
+
+        // Files deleted in the delta still have their base mappings until the
+        // next compaction; the query path hides the file, so the counts must
+        // hide its tags too.
+        for (const auto hash_id : delta.deleted_files)
+        {
+            std::vector<std::uint32_t> base;
+            collect_base_tags(hash_id, base);
+            for (const auto tag_id : base)
+            {
+                adjust(tag_id, -1);
+            }
+        }
+
+        std::unordered_map<std::uint32_t, std::vector<std::uint32_t>> deletions;
+        for (const auto key : delta.mapping_deletions)
+        {
+            deletions[static_cast<std::uint32_t>(key >> 32)].push_back(
+                static_cast<std::uint32_t>(key & 0xffffffffu));
+        }
+
+        std::unordered_set<std::uint32_t> affected;
+        for (const auto& [hash_id, tags] : delta.mapping_additions)
+        {
+            (void)tags;
+            affected.insert(hash_id);
+        }
+        for (const auto& [hash_id, tags] : deletions)
+        {
+            (void)tags;
+            affected.insert(hash_id);
+        }
+
+        for (const auto hash_id : affected)
+        {
+            if (delta.deleted_files.count(hash_id) != 0)
+            {
+                continue;
+            }
+
+            std::vector<std::uint32_t> base;
+            collect_base_tags(hash_id, base);
+            std::vector<std::uint32_t> final = base;
+
+            auto contains = [](const std::vector<std::uint32_t>& values, std::uint32_t value) {
+                return std::find(values.begin(), values.end(), value) != values.end();
+            };
+
+            if (const auto iterator = delta.mapping_additions.find(hash_id);
+                iterator != delta.mapping_additions.end())
+            {
+                for (const auto tag_id : iterator->second)
+                {
+                    if (!contains(final, tag_id))
+                    {
+                        final.push_back(tag_id);
+                    }
+                }
+            }
+            if (const auto iterator = deletions.find(hash_id); iterator != deletions.end())
+            {
+                for (const auto tag_id : iterator->second)
+                {
+                    final.erase(std::remove(final.begin(), final.end(), tag_id), final.end());
+                }
+            }
+
+            // Only tags touched by the delta can change their membership.
+            std::unordered_set<std::uint32_t> candidates;
+            if (const auto iterator = delta.mapping_additions.find(hash_id);
+                iterator != delta.mapping_additions.end())
+            {
+                candidates.insert(iterator->second.begin(), iterator->second.end());
+            }
+            if (const auto iterator = deletions.find(hash_id); iterator != deletions.end())
+            {
+                candidates.insert(iterator->second.begin(), iterator->second.end());
+            }
+
+            for (const auto tag_id : candidates)
+            {
+                const bool in_base = contains(base, tag_id);
+                const bool in_final = contains(final, tag_id);
+                if (in_base != in_final)
+                {
+                    adjust(tag_id, in_final ? 1 : -1);
+                }
+            }
+        }
+    }
 };
 
 Store::Store()
@@ -333,6 +514,81 @@ bool Store::open(const std::filesystem::path& store_dir, std::string& error)
         impl_->tag_segments.push_back(std::move(segment));
     }
 
+    impl_->counts = MappedFile {};
+    impl_->count_entries = nullptr;
+    impl_->count_len = 0;
+    impl_->counts_built_at = 0;
+
+    {
+        const auto path = store_dir / "counts.bin";
+        if (path_exists(path))
+        {
+            std::string counts_error;
+            if (!impl_->counts.open(path, counts_error))
+            {
+                HYD_LOGF(warn, "ignoring tag counts: %s", counts_error.c_str());
+            }
+            else if (impl_->counts.size() < kTagCountsHeader
+                || std::memcmp(impl_->counts.data(), kTagCountsMagic, 8) != 0
+                || read_u32(impl_->counts.data() + 8) != kTagCountsFormat)
+            {
+                HYD_LOG(warn, "ignoring tag counts: bad header (run --rebuild-tag-counts)");
+            }
+            else
+            {
+                const std::uint32_t count = read_u32(impl_->counts.data() + 12);
+                if (impl_->counts.size() < kTagCountsHeader + static_cast<std::size_t>(count) * 4)
+                {
+                    HYD_LOG(warn, "ignoring tag counts: truncated (run --rebuild-tag-counts)");
+                }
+                else
+                {
+                    impl_->count_entries = impl_->counts.data() + kTagCountsHeader;
+                    impl_->count_len = count;
+                    impl_->counts_built_at = static_cast<std::int64_t>(
+                        read_u64(impl_->counts.data() + 20));
+                }
+            }
+        }
+    }
+
+    impl_->tag_lookup = MappedFile {};
+    impl_->lookup_entries = nullptr;
+    impl_->lookup_count = 0;
+
+    {
+        const auto path = store_dir / "tag_lookup.bin";
+        if (path_exists(path))
+        {
+            std::string lookup_error;
+            if (!impl_->tag_lookup.open(path, lookup_error))
+            {
+                HYD_LOGF(warn, "ignoring tag name index: %s", lookup_error.c_str());
+            }
+            else if (impl_->tag_lookup.size() < kTagLookupHeader
+                || std::memcmp(impl_->tag_lookup.data(), kTagLookupMagic, 8) != 0
+                || read_u32(impl_->tag_lookup.data() + 8) != kTagLookupFormat)
+            {
+                HYD_LOG(warn,
+                    "ignoring tag name index: bad header (run --rebuild-tag-counts)");
+            }
+            else
+            {
+                const std::uint32_t count = read_u32(impl_->tag_lookup.data() + 12);
+                if (impl_->tag_lookup.size() < kTagLookupHeader + static_cast<std::size_t>(count) * 8)
+                {
+                    HYD_LOG(warn,
+                        "ignoring tag name index: truncated (run --rebuild-tag-counts)");
+                }
+                else
+                {
+                    impl_->lookup_entries = impl_->tag_lookup.data() + kTagLookupHeader;
+                    impl_->lookup_count = count;
+                }
+            }
+        }
+    }
+
     impl_->siblings.clear();
     impl_->parents.clear();
 
@@ -431,6 +687,8 @@ bool Store::open(const std::filesystem::path& store_dir, std::string& error)
         }
     }
 
+    impl_->build_count_overlay(delta_);
+
     open_ = true;
     return true;
 }
@@ -487,6 +745,88 @@ std::optional<std::string> Store::tag_string(std::uint32_t tag_id) const
     }
 
     return std::nullopt;
+}
+
+bool Store::has_tag_counts() const
+{
+    return open_ && impl_->count_entries != nullptr && impl_->lookup_entries != nullptr;
+}
+
+std::int64_t Store::tag_counts_built_at() const
+{
+    return impl_->counts_built_at;
+}
+
+std::optional<std::uint64_t> Store::tag_count(std::string_view tag) const
+{
+    if (!open_ || impl_->count_entries == nullptr)
+    {
+        return std::nullopt;
+    }
+
+    std::optional<std::uint32_t> tag_id;
+
+    if (impl_->lookup_entries != nullptr)
+    {
+        const std::uint32_t wanted = tag_name_hash(tag);
+        std::size_t low = 0;
+        std::size_t high = impl_->lookup_count;
+        while (low < high)
+        {
+            const std::size_t middle = low + (high - low) / 2;
+            if (read_u32(impl_->lookup_entries + middle * 8) < wanted)
+            {
+                low = middle + 1;
+            }
+            else
+            {
+                high = middle;
+            }
+        }
+        while (low < impl_->lookup_count
+            && read_u32(impl_->lookup_entries + low * 8) == wanted)
+        {
+            const auto candidate = read_u32(impl_->lookup_entries + low * 8 + 4);
+            if (const auto text = tag_string(candidate); text && *text == tag)
+            {
+                tag_id = candidate;
+                break;
+            }
+            ++low;
+        }
+    }
+
+    if (!tag_id)
+    {
+        // A tag defined since the last compaction only exists in the delta
+        // journal and is not in the lookup file yet.
+        for (const auto& [candidate, text] : delta_.tags)
+        {
+            if (text == tag)
+            {
+                tag_id = candidate;
+                break;
+            }
+        }
+    }
+
+    if (!tag_id)
+    {
+        return std::nullopt;
+    }
+
+    std::int64_t count = 0;
+    if (static_cast<std::size_t>(*tag_id) < impl_->count_len)
+    {
+        count = read_u32(impl_->count_entries + static_cast<std::size_t>(*tag_id) * 4);
+    }
+    if (const auto iterator = impl_->count_overlay.find(*tag_id);
+        iterator != impl_->count_overlay.end())
+    {
+        count += iterator->second;
+    }
+
+    return static_cast<std::uint64_t>(std::max<std::int64_t>(0, count));
 }
 
 TagQueryResult Store::lookup(std::span<const std::uint8_t> hash) const

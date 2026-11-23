@@ -318,7 +318,7 @@ int main()
             { "sync_enabled", true },
             { "sync_interval_seconds", 3600 },
             { "service_name", "public tag repository" },
-            { "hyd_version", "0.7.2" },
+            { "hyd_version", "0.8.0" },
             { "hashes", 206154409 },
             { "sha256_hashes", 206154408 },
             { "legacy_hashes", 1 },

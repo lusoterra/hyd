@@ -285,6 +285,30 @@ bool Config::finalize(std::string& error)
         return false;
     }
 
+    const auto max_connections = get_int("max_connections", 128);
+    if (max_connections < 1 || max_connections > 4096)
+    {
+        error = "max_connections must be between 1 and 4096";
+        return false;
+    }
+
+    if (get_bool("rate_limit_enabled", true))
+    {
+        const auto per_minute = get_int("rate_limit_requests_per_minute", 600);
+        if (per_minute < 1)
+        {
+            error = "rate_limit_requests_per_minute must be at least 1";
+            return false;
+        }
+
+        const auto burst = get_int("rate_limit_burst", 120);
+        if (burst < 1)
+        {
+            error = "rate_limit_burst must be at least 1";
+            return false;
+        }
+    }
+
     return true;
 }
 
@@ -380,7 +404,17 @@ void Config::dump_effective() const
         : human_bytes(download_cap);
     HYD_LOGF(info, "max_download_bytes: %s", download_cap_text.c_str());
     HYD_LOGF(info, "keep_update_cache: %s", get_bool("keep_update_cache", false) ? "true" : "false");
+    HYD_LOGF(info, "tag_counts_enabled: %s", get_bool("tag_counts_enabled", true) ? "true" : "false");
+    HYD_LOGF(info, "tag_counts_rebuild_after_sync: %s",
+        get_bool("tag_counts_rebuild_after_sync", false) ? "true" : "false");
     HYD_LOGF(info, "require_localhost_key: %s", get_bool("require_localhost_key", false) ? "true" : "false");
+    HYD_LOGF(info, "max_connections: %lld", static_cast<long long>(get_int("max_connections", 128)));
+    HYD_LOGF(info, "rate_limit_enabled: %s", get_bool("rate_limit_enabled", true) ? "true" : "false");
+    HYD_LOGF(info, "rate_limit_requests_per_minute: %lld",
+        static_cast<long long>(get_int("rate_limit_requests_per_minute", 600)));
+    HYD_LOGF(info, "rate_limit_burst: %lld", static_cast<long long>(get_int("rate_limit_burst", 120)));
+    HYD_LOGF(info, "rate_limit_local_bypass: %s",
+        get_bool("rate_limit_local_bypass", false) ? "true" : "false");
     HYD_LOGF(info, "log_level: %s", get_string("log_level", "info").c_str());
     HYD_LOGF(info, "log_file: %s", get_string("log_file", "(stderr only)").c_str());
     HYD_LOGF(info, "repository_access_key: %s", repository_access_key().empty() ? "(none)" : "(set)");

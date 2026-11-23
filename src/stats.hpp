@@ -6,6 +6,7 @@
 
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace hyd {
 
@@ -22,5 +23,9 @@ int run_stats(const Config& config);
 // Queries the local API for one file hash and prints its tags in the same
 // shape as --query. Accepts SHA-256, SHA-1, or MD5. Returns a process exit code.
 int run_api_query(const Config& config, std::string_view hash);
+
+// Queries /hydd/tag_counts on the local API and prints one "tag<TAB>count"
+// line per requested tag ("unknown" when the repository has never defined it).
+int run_tag_counts(const Config& config, const std::vector<std::string>& tags);
 
 } // namespace hyd

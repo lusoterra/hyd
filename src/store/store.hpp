@@ -55,6 +55,13 @@ public:
     // seen (or has deleted). Accepts SHA-256, SHA-1, and MD5 hash bytes.
     TagQueryResult lookup(std::span<const std::uint8_t> hash) const override;
 
+    // Current mapping count for an exact storage tag name, including the
+    // pending delta. Returns nullopt when the tag is not defined or when the
+    // derived count files have not been built.
+    std::optional<std::uint64_t> tag_count(std::string_view tag) const override;
+    bool has_tag_counts() const override;
+    std::int64_t tag_counts_built_at() const override;
+
     std::optional<std::string> tag_string(std::uint32_t tag_id) const;
 
     const StoreManifest& manifest() const { return manifest_; }

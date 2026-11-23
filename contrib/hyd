@@ -4,6 +4,9 @@
 #   hyd [--sha256|--sha1|--md5] FILE   hash FILE and query its tags
 #   hyd HASH                           query a SHA-256, SHA-1, or MD5 hash
 #   hyd stats|scan|repair|verify|version
+#   hyd counts TAG...                  mapping count per tag from the running API
+#   hyd rebuild-counts                 rebuild counts.bin and tag_lookup.bin
+#   hyd check                          verify the store and the derived counts
 #
 # Set HYD_BIN or HYD_CONFIG to override the defaults.
 
@@ -17,6 +20,9 @@ usage()
     cat <<'EOF'
 usage: hyd [--sha256|--sha1|--md5] FILE|HASH
        hyd stats
+       hyd counts TAG...
+       hyd rebuild-counts
+       hyd check
        hyd scan
        hyd repair
        hyd verify
@@ -128,6 +134,69 @@ cmd_stats()
     "$HYD_BIN" -c "$HYD_CONFIG" --stats
 }
 
+cmd_counts()
+{
+    require_bin
+    [ "$#" -gt 0 ] || fail "no tag given"
+    status=0
+    for tag in "$@"; do
+        if ! "$HYD_BIN" -c "$HYD_CONFIG" --tag-counts "$tag"; then
+            status=1
+        fi
+    done
+    return "$status"
+}
+
+# run_privileged CMD...: run as the current user, and retry through doas/sudo
+# only when the first failure looks like a permissions or daemon-lock problem.
+# This keeps `hyd rebuild-counts` usable on a local install (user-owned data
+# dir) without asking for a password, while working on the packaged system
+# service (root-owned /var/lib/hyd).
+run_privileged()
+{
+    output=$("$@" 2>&1)
+    rc=$?
+    if [ "$rc" -eq 0 ]; then
+        [ -z "$output" ] || printf '%s\n' "$output"
+        return 0
+    fi
+
+    case "$output" in
+        *"Permission denied"*|*"cannot open"*|*"cannot create"*|*"cannot chmod"*|*"another hydd process"*)
+            if [ "$(id -u)" -eq 0 ]; then
+                printf '%s\n' "$output" >&2
+                return "$rc"
+            fi
+            printf 'hyd: retrying with elevated privileges\n' >&2
+            if command -v doas >/dev/null 2>&1; then
+                doas "$@"
+            elif command -v sudo >/dev/null 2>&1; then
+                sudo "$@"
+            else
+                printf '%s\n' "$output" >&2
+                fail "need root (or the hyd user); install doas or sudo, or run it yourself"
+            fi
+            ;;
+        *)
+            [ -z "$output" ] || printf '%s\n' "$output" >&2
+            return "$rc"
+            ;;
+    esac
+}
+
+cmd_rebuild_counts()
+{
+    require_bin
+    run_privileged "$HYD_BIN" -c "$HYD_CONFIG" --rebuild-tag-counts
+}
+
+cmd_check()
+{
+    require_bin
+    run_privileged "$HYD_BIN" -c "$HYD_CONFIG" --verify-store || return 1
+    run_privileged "$HYD_BIN" -c "$HYD_CONFIG" --check-tag-counts
+}
+
 cmd_scan()
 {
     require_bin
@@ -176,6 +245,19 @@ case "$1" in
     stats)
         cmd_stats
         exit 0
+        ;;
+    counts)
+        shift
+        cmd_counts "$@"
+        exit $?
+        ;;
+    rebuild-counts)
+        cmd_rebuild_counts
+        exit $?
+        ;;
+    check)
+        cmd_check
+        exit $?
         ;;
     scan)
         cmd_scan

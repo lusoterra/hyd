@@ -42,6 +42,7 @@ service_name = integration ptr
 partitions = 4
 sync_interval_seconds = 3600
 keep_update_cache = true
+rate_limit_requests_per_minute = 6000
 log_level = warn
 EOF
 
@@ -90,6 +91,15 @@ fi
 OUT=$("${BIN}" -c "${WORK}/hydd.conf" --query "${L2}")
 echo "${OUT}" | grep -q 'creator:gamma'
 
+# Derived tag metadata: the explicit rebuild and the startup auto-build path.
+rm -f "${WORK}/data/store/counts.bin" "${WORK}/data/store/tag_lookup.bin"
+"${BIN}" -c "${WORK}/hydd.conf" --rebuild-tag-counts
+[ -f "${WORK}/data/store/counts.bin" ]
+[ -f "${WORK}/data/store/tag_lookup.bin" ]
+"${BIN}" -c "${WORK}/hydd.conf" --check-tag-counts | grep -q '0 mismatches'
+# Remove them again so the daemon has to rebuild them at startup.
+rm -f "${WORK}/data/store/counts.bin" "${WORK}/data/store/tag_lookup.bin"
+
 "${BIN}" -c "${WORK}/hydd.conf" --verify-store | grep -q '5 hashes'
 "${BIN}" -c "${WORK}/hydd.conf" --verify-store | grep -q '1 delta records' 2>/dev/null || true
 
@@ -107,12 +117,49 @@ echo "${STATS}" | grep -q 'SHA-256'
 echo "${STATS}" | grep -q 'Mappings'
 echo "${STATS}" | grep -q 'ready'
 [ ! -e "${WORK}/stats-no-data" ]
-# /stats requires authorization (/health stays open for Hydrus parity);
+# /hydd/stats requires authorization (/hydd/health stays open);
 # loopback trust is disabled by require_localhost_key=true here, so send a key.
-[ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT_API}/stats")" = "401" ]
-curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" "http://127.0.0.1:${PORT_API}/stats" | grep -q '"built":true'
-curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" "http://127.0.0.1:${PORT_API}/stats" | grep -q '"phase":"idle"'
-curl -s "http://127.0.0.1:${PORT_API}/health" | grep -q '"built":true'
+[ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT_API}/hydd/stats")" = "401" ]
+curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" "http://127.0.0.1:${PORT_API}/hydd/stats" | grep -q '"built":true'
+curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" "http://127.0.0.1:${PORT_API}/hydd/stats" | grep -q '"phase":"idle"'
+curl -s "http://127.0.0.1:${PORT_API}/hydd/health" | grep -q '"built":true'
+# The pre-0.8 top-level extension paths are gone.
+[ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT_API}/stats")" = "404" ]
+[ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT_API}/health")" = "404" ]
+
+# Derived tag counts: base counts plus the pending delta overlay. A store that
+# was missing the derived files builds them in the background after startup, so
+# wait for the first 200 before asserting values.
+[ "$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/hydd/tag_counts?tags=series:alpha")" = "401" ]
+COUNT_READY=0
+for _ in $(seq 1 100); do
+    if [ "$(curl -s -o /dev/null -w '%{http_code}' \
+        -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+        "${BASE}/hydd/tag_counts?tags=series:alpha")" = "200" ]; then
+        COUNT_READY=1
+        break
+    fi
+    sleep 0.1
+done
+[ "${COUNT_READY}" = "1" ]
+COUNTS=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    -H 'Content-Type: application/json' \
+    -d '{"tags":["series:alpha","creator:gamma","character:beta","character:delta","no:such-tag"]}' \
+    "${BASE}/hydd/tag_counts")
+echo "${COUNTS}" | grep -q '"series:alpha":2'
+echo "${COUNTS}" | grep -q '"creator:gamma":3'
+echo "${COUNTS}" | grep -q '"character:beta":1'
+echo "${COUNTS}" | grep -q '"character:delta":1'
+echo "${COUNTS}" | grep -q '"unknown":\["no:such-tag"\]'
+GET_COUNTS=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    "${BASE}/hydd/tag_counts?tags=series:alpha")
+echo "${GET_COUNTS}" | grep -q '"series:alpha":2'
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    "${BASE}/hydd/tag_counts")" = "400" ]
+
+HELPER_COUNTS=$(HYD_BIN="${BIN}" HYD_CONFIG="${WORK}/hydd.conf" \
+    "${ROOT}/contrib/hyd" counts "series:alpha")
+printf '%s\n' "${HELPER_COUNTS}" | grep -q 'series:alpha	2'
 
 VERSION=$("${BIN}" --version | awk '{print $2}' | sed 's/^v//')
 [ "$("${BIN}" --version)" = "hyd v${VERSION}" ]
@@ -229,7 +276,7 @@ BODY=$(curl -s -X POST -H 'Content-Type: application/json' \
 echo "${BODY}" | grep -q "${L2}"
 echo "${BODY}" | grep -q 'creator:gamma'
 
-curl -s "${BASE}/health" | grep -q '"built":true'
+curl -s "${BASE}/hydd/health" | grep -q '"built":true'
 
 kill "${DAEMON_PID}" 2>/dev/null || true
 wait "${DAEMON_PID}" 2>/dev/null || true
@@ -447,5 +494,36 @@ fi
 "${BIN}" -c "${WORK}/adopt.conf" --verify-store | grep -q '5 hashes'
 OUT=$("${BIN}" -c "${WORK}/adopt.conf" --query "${H1}")
 echo "${OUT}" | grep -q 'series:alpha'
+
+# Rate limiting: a small burst, then 429 with Retry-After. Loopback bypass
+# stays off, so this is the same path a public client takes.
+kill "${DAEMON_PID}" 2>/dev/null || true
+wait "${DAEMON_PID}" 2>/dev/null || true
+DAEMON_PID=
+cat > "${WORK}/rate.conf" <<EOF
+data_dir = ${WORK}/data
+listen_address = 127.0.0.1
+listen_port = ${PORT_API}
+repository_url = http://127.0.0.1:${PORT_REPO}
+partitions = 4
+sync_interval_seconds = 3600
+rate_limit_requests_per_minute = 30
+rate_limit_burst = 4
+tag_counts_enabled = false
+log_level = warn
+EOF
+"${BIN}" -c "${WORK}/rate.conf" --no-sync > "${WORK}/rate.log" 2>&1 &
+DAEMON_PID=$!
+sleep 1
+
+# Disabled tag counts answer 404 (and consume one of the four burst tokens).
+[ "$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/hydd/tag_counts?tags=series:alpha")" = "404" ]
+
+for _ in 1 2 3; do
+    [ "$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/hydd/health")" = "200" ]
+done
+LIMITED=$(curl -s -D "${WORK}/rate-headers" -o /dev/null -w '%{http_code}' "${BASE}/hydd/health")
+[ "${LIMITED}" = "429" ]
+grep -qi '^retry-after:' "${WORK}/rate-headers"
 
 echo "integration test passed"

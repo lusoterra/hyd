@@ -63,6 +63,9 @@ struct Options
     bool repair_cache = false;
     bool stats = false;
     bool compact = false;
+    bool rebuild_tag_counts = false;
+    bool check_tag_counts = false;
+    std::vector<std::string> tag_count_tags;
     bool print_access_key = false;
     std::string query_hash;
 };
@@ -88,6 +91,9 @@ void print_help()
         "      --repair-cache         Re-download missing or corrupt cached update files and exit\n"
         "      --stats                Query the running local API and print repository statistics\n"
         "      --compact              Merge pending deltas into the base store and exit\n"
+        "      --rebuild-tag-counts   Rebuild the derived tag counts and tag name index and exit\n"
+        "      --check-tag-counts     Verify the derived tag counts and tag name index and exit\n"
+        "      --tag-counts TAG       Query the running API for mapping counts (repeatable)\n"
         "      --print-access-key     Print every configured API access key and exit\n"
         "      --log-level LEVEL      trace, debug, info, warn, error, off\n"
         "  -h, --help                 Show this help\n"
@@ -117,6 +123,9 @@ std::optional<Options> parse_options(int argc, char** argv, std::string& error)
         { "scan-updates", no_argument, nullptr, 1007 },
         { "stats", no_argument, nullptr, 1008 },
         { "repair-cache", no_argument, nullptr, 1010 },
+        { "rebuild-tag-counts", no_argument, nullptr, 1011 },
+        { "check-tag-counts", no_argument, nullptr, 1012 },
+        { "tag-counts", required_argument, nullptr, 1013 },
         { "help", no_argument, nullptr, 'h' },
         { "version", no_argument, nullptr, 'V' },
         { nullptr, 0, nullptr, 0 },
@@ -187,6 +196,15 @@ std::optional<Options> parse_options(int argc, char** argv, std::string& error)
                 break;
             case 1010:
                 options.repair_cache = true;
+                break;
+            case 1011:
+                options.rebuild_tag_counts = true;
+                break;
+            case 1012:
+                options.check_tag_counts = true;
+                break;
+            case 1013:
+                options.tag_count_tags.emplace_back(optarg);
                 break;
             case 'h':
                 print_help();
@@ -439,6 +457,56 @@ bool reload_store(Runtime& runtime, std::string& error)
     return true;
 }
 
+// Builds counts.bin/tag_lookup.bin when they are missing (upgrade from 0.7.x)
+// or when force is set. Runs off the API thread so startup stays immediate;
+// /hydd/tag_counts answers 503 until this finishes.
+void build_tag_metadata_if_needed(Runtime& runtime, bool force)
+{
+    if (!runtime.config.get_bool("tag_counts_enabled", true))
+    {
+        return;
+    }
+
+    std::shared_ptr<const hyd::TagSource> store;
+    {
+        std::lock_guard<std::mutex> lock(runtime.store_mutex);
+        store = runtime.store;
+    }
+    if (!store)
+    {
+        return;
+    }
+    if (!force && store->has_tag_counts())
+    {
+        return;
+    }
+
+    HYD_LOG(info, "building derived tag counts and tag name index (one time)");
+
+    hyd::SyncCallbacks callbacks;
+    callbacks.should_stop = [] { return g_stop.load(); };
+
+    std::string error;
+    if (!hyd::rebuild_tag_metadata(runtime.config, callbacks, error))
+    {
+        if (error != "stopped")
+        {
+            HYD_LOGF(warn, "cannot build tag metadata: %s", error.c_str());
+        }
+        return;
+    }
+
+    std::string reload_error;
+    if (!reload_store(runtime, reload_error))
+    {
+        HYD_LOGF(warn, "cannot reload store after tag metadata build: %s", reload_error.c_str());
+    }
+    else
+    {
+        HYD_LOG(info, "tag counts are ready");
+    }
+}
+
 void run_sync(Runtime& runtime, bool& stopped, std::string& error)
 {
     hyd::SyncCallbacks callbacks;
@@ -513,6 +581,11 @@ int main(int argc, char** argv)
     if (options->api_query)
     {
         return hyd::run_api_query(runtime.config, options->query_hash);
+    }
+
+    if (!options->tag_count_tags.empty())
+    {
+        return hyd::run_tag_counts(runtime.config, options->tag_count_tags);
     }
 
     hyd::log_set_level(hyd::log_level_from_string(runtime.config.get_string("log_level", "info")));
@@ -627,7 +700,8 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    const bool inspection_only = options->query || options->verify_store;
+    const bool inspection_only = options->query || options->verify_store
+        || options->check_tag_counts;
 
     // Held open for the rest of the process lifetime: closing the fd would
     // release the flock. Must live outside the block scope below.
@@ -673,6 +747,7 @@ int main(int argc, char** argv)
             HYD_LOGF(warn, "store is marked built but cannot be opened: %s", reload_error.c_str());
         }
     }
+
     runtime.handlers->set_sync_state(runtime.sync_state);
     runtime.handlers->set_partial(runtime.sync_state.partial);
 
@@ -776,6 +851,57 @@ int main(int argc, char** argv)
         return 0;
     }
 
+    if (options->rebuild_tag_counts)
+    {
+        if (!runtime.sync_state.built)
+        {
+            std::cerr << "hydd: the store has not been built yet\n";
+            return 1;
+        }
+
+        hyd::SyncCallbacks callbacks;
+        callbacks.should_stop = [] { return g_stop.load(); };
+
+        if (!hyd::rebuild_tag_metadata(runtime.config, callbacks, error))
+        {
+            HYD_LOGF(error, "tag metadata rebuild failed: %s", error.c_str());
+            return 1;
+        }
+        return 0;
+    }
+
+    if (options->check_tag_counts)
+    {
+        if (!runtime.sync_state.built)
+        {
+            std::cerr << "hydd: the store has not been built yet\n";
+            return 1;
+        }
+        if (!runtime.config.get_bool("tag_counts_enabled", true))
+        {
+            std::cout << "tag counts are disabled (tag_counts_enabled = false)\n";
+            return 0;
+        }
+
+        hyd::SyncCallbacks callbacks;
+        callbacks.should_stop = [] { return g_stop.load(); };
+
+        hyd::TagMetadataCheck result;
+        if (!hyd::check_tag_metadata(runtime.config, callbacks, result, error))
+        {
+            HYD_LOGF(error, "tag metadata check failed: %s", error.c_str());
+            return 1;
+        }
+
+        std::cout << "tag metadata: " << result.checked << " counts checked, "
+                  << result.mismatches << " mismatches, " << result.lookup_entries
+                  << "/" << result.expected_lookup_entries << " name entries\n";
+
+        return (result.mismatches == 0 && result.lookup_entries == result.expected_lookup_entries)
+            ? 0
+            : 1;
+    }
+
     if (options->sync_once)
     {
         hyd::HttpClient::global_init();
@@ -787,6 +913,7 @@ int main(int argc, char** argv)
             hyd::HttpClient::global_cleanup();
             return 1;
         }
+        build_tag_metadata_if_needed(runtime, false);
         if (stopped)
         {
             HYD_LOGF(info, "sync stopped");
@@ -807,6 +934,7 @@ int main(int argc, char** argv)
     hyd::HttpClient::global_init();
 
     hyd::ApiServer server(runtime.config.listen_address(), runtime.config.listen_port(),
+        static_cast<std::size_t>(runtime.config.get_int("max_connections", 128)),
         [&runtime](const hyd::ApiRequest& request) { return runtime.handlers->handle(request); });
 
     if (!server.start(error))
@@ -818,6 +946,14 @@ int main(int argc, char** argv)
 
     const bool sync_enabled = runtime.config.get_bool("sync_enabled", true);
     std::thread sync_thread;
+    std::thread tag_thread;
+
+    if (!sync_enabled && runtime.config.get_bool("tag_counts_enabled", true))
+    {
+        // No sync thread will run compaction, so a one-shot metadata build is
+        // safe to do in parallel with serving requests.
+        tag_thread = std::thread([&runtime] { build_tag_metadata_if_needed(runtime, false); });
+    }
 
     if (sync_enabled)
     {
@@ -879,6 +1015,11 @@ int main(int argc, char** argv)
 
             const bool sync_on_start = runtime.config.get_bool("sync_on_start", true);
             runtime.handlers->set_next_check_at(0);
+
+            // Upgrade path, and the explicit refresh knob. Doing this on the
+            // sync thread means it can never race with compaction.
+            build_tag_metadata_if_needed(runtime, false);
+
             if (sync_on_start || !runtime.sync_state.built)
             {
                 std::string sync_error;
@@ -887,6 +1028,10 @@ int main(int argc, char** argv)
                 if (!sync_error.empty())
                 {
                     HYD_LOGF(error, "sync failed: %s", sync_error.c_str());
+                }
+                if (runtime.config.get_bool("tag_counts_rebuild_after_sync", false))
+                {
+                    build_tag_metadata_if_needed(runtime, true);
                 }
             }
             run_repairs();
@@ -914,6 +1059,10 @@ int main(int argc, char** argv)
                 {
                     HYD_LOGF(error, "sync failed: %s", sync_error.c_str());
                 }
+                if (runtime.config.get_bool("tag_counts_rebuild_after_sync", false))
+                {
+                    build_tag_metadata_if_needed(runtime, true);
+                }
                 run_repairs();
             }
         });
@@ -930,6 +1079,10 @@ int main(int argc, char** argv)
     if (sync_thread.joinable())
     {
         sync_thread.join();
+    }
+    if (tag_thread.joinable())
+    {
+        tag_thread.join();
     }
 
     hyd::HttpClient::global_cleanup();

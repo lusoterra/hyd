@@ -3,7 +3,9 @@
 #include "common/util.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace hyd {
@@ -40,6 +42,16 @@ public:
     virtual std::uint64_t total_parent_count() const { return 0; }
     virtual std::uint64_t legacy_hash_count() const { return 0; }
     virtual std::size_t partition_count() const { return 0; }
+
+    // Derived tag metadata. The default implementation reports "not built" so
+    // callers can answer 503 instead of inventing a count.
+    virtual std::optional<std::uint64_t> tag_count(std::string_view tag) const
+    {
+        (void)tag;
+        return std::nullopt;
+    }
+    virtual bool has_tag_counts() const { return false; }
+    virtual std::int64_t tag_counts_built_at() const { return 0; }
 };
 
 } // namespace hyd

@@ -9,6 +9,7 @@
 #include <nlohmann/json.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -52,6 +53,7 @@ private:
     ApiResponse handle_session_key(const ApiRequest& request);
     ApiResponse handle_verify_access_key() const;
     ApiResponse handle_client_info() const;
+    ApiResponse handle_tag_counts(const ApiRequest& request, const nlohmann::json& params);
     ApiResponse handle_repository_metadata(const ApiRequest& request);
     ApiResponse handle_repository_update(const ApiRequest& request);
 
@@ -59,6 +61,15 @@ private:
 
     bool authorize(const ApiRequest& request, const nlohmann::json& params, ApiResponse& failure);
     std::string access_key_from(const ApiRequest& request, const nlohmann::json& params) const;
+
+    // Per-client token bucket. Returns false and fills `failure` with a 429
+    // when the caller has spent more than its budget. The identity is the
+    // access/session key when one is supplied, otherwise the peer address.
+    bool rate_limit(const ApiRequest& request, ApiResponse& failure);
+    bool consume_rate_token(const std::string& key,
+        const std::chrono::steady_clock::time_point& now, const ApiRequest& request,
+        ApiResponse& failure);
+    std::string rate_limit_key(const ApiRequest& request) const;
 
     nlohmann::json services_dict() const;
     nlohmann::json services_list() const;
@@ -96,6 +107,21 @@ private:
     // access key (loopback-bypass mints share one bucket). New mints beyond
     // the cap fail with 429 instead of growing the map forever.
     static constexpr std::size_t kMaxSessionsPerKey = 32;
+
+    struct RateBucket
+    {
+        double tokens = 0.0;
+        std::chrono::steady_clock::time_point last {};
+    };
+
+    mutable std::mutex rate_mutex_;
+    std::unordered_map<std::string, RateBucket> rate_buckets_;
+    bool rate_limit_enabled_ = false;
+    bool rate_limit_local_bypass_ = false;
+    double rate_per_second_ = 10.0;
+    double rate_burst_ = 120.0;
+    static constexpr std::size_t kMaxRateBuckets = 4096;
+    static constexpr std::chrono::seconds kRateBucketIdle { 600 };
 };
 
 } // namespace hyd

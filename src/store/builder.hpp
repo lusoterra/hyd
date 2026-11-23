@@ -89,6 +89,25 @@ bool sync_repository(const Config& config, const SyncCallbacks& callbacks, bool&
 // simply reapplied on the next run.
 bool compact_store(const Config& config, const SyncCallbacks& callbacks, SyncState& state, std::string& error);
 
+// Rebuilds the derived tag-count and tag-name lookup files from the base
+// store. Used on upgrade from a store built before those files existed, and
+// by --rebuild-tag-counts. Never modifies the base store or the delta journal.
+bool rebuild_tag_metadata(const Config& config, const SyncCallbacks& callbacks, std::string& error);
+
+struct TagMetadataCheck
+{
+    std::uint64_t tag_ids = 0;
+    std::uint64_t checked = 0;
+    std::uint64_t mismatches = 0;
+    std::uint64_t lookup_entries = 0;
+    std::uint64_t expected_lookup_entries = 0;
+};
+
+// Recomputes the base counts and compares them with counts.bin without writing
+// anything. Used by --check-tag-counts.
+bool check_tag_metadata(const Config& config, const SyncCallbacks& callbacks,
+    TagMetadataCheck& result, std::string& error);
+
 // Ensures sync state exists with defaults on startup. The custom store is the
 // only backend, and legacy directories are intentionally ignored.
 bool validate_storage_backend(const Config& config, SyncState& state, std::string& error);

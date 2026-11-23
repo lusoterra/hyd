@@ -577,11 +577,19 @@ int run_stats(const Config& config)
 
         HttpResponse response;
         std::string error;
-        bool ok = get_with_keys("/stats", response, error);
+        bool ok = get_with_keys("/hydd/stats", response, error);
         if (!ok && error.rfind("HTTP 404", 0) == 0)
         {
-            // Older daemons only have /health; /stats is the richer hydd
-            // extension on new ones.
+            // Pre-0.8 daemons kept the extensions at the top level and only
+            // had /health; try both spellings so `hyd --stats` keeps working.
+            ok = get_with_keys("/stats", response, error);
+        }
+        if (!ok && error.rfind("HTTP 404", 0) == 0)
+        {
+            ok = get_with_keys("/hydd/health", response, error);
+        }
+        if (!ok && error.rfind("HTTP 404", 0) == 0)
+        {
             ok = get_with_keys("/health", response, error);
         }
 
@@ -797,6 +805,100 @@ int run_api_query(const Config& config, std::string_view hash)
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+
+    HttpClient::global_cleanup();
+    return exit_code;
+}
+
+int run_tag_counts(const Config& config, const std::vector<std::string>& tags)
+{
+    if (tags.empty())
+    {
+        std::cerr << "hydd: --tag-counts needs at least one tag\n";
+        return 2;
+    }
+    if (tags.size() > 1000)
+    {
+        std::cerr << "hydd: at most 1000 tags per --tag-counts call\n";
+        return 2;
+    }
+
+    nlohmann::json requested = nlohmann::json::array();
+    for (const auto& tag : tags)
+    {
+        requested.push_back(tag);
+    }
+
+    const std::string api_url = local_api_url(config);
+    const auto keys = local_api_keys(config);
+    const std::string path = "/hydd/tag_counts?tags=" + percent_encode(requested.dump());
+
+    HttpClient::global_init();
+
+    HttpResponse response;
+    std::string last_error;
+    bool got_response = false;
+
+    HttpClient client(api_url, std::string(), "hydd-counts");
+    client.set_timeout_seconds(10);
+    client.set_retries(0);
+
+    std::vector<std::string> attempts = keys;
+    if (attempts.empty())
+    {
+        attempts.emplace_back();
+    }
+
+    for (std::size_t attempt = 0; attempt < attempts.size(); ++attempt)
+    {
+        client.set_api_access_key(attempts[attempt]);
+        if (client.get(path, response, last_error))
+        {
+            got_response = true;
+            break;
+        }
+
+        const bool auth_error = last_error.rfind("HTTP 401", 0) == 0
+            || last_error.rfind("HTTP 403", 0) == 0;
+        if (!auth_error || attempt + 1 >= attempts.size())
+        {
+            break;
+        }
+    }
+
+    int exit_code = 0;
+
+    if (!got_response)
+    {
+        std::cerr << "hydd: cannot reach the API at " << api_url << ": " << last_error << "\n";
+        exit_code = 1;
+    }
+    else
+    {
+        const std::string body(response.body.begin(), response.body.end());
+        auto document = nlohmann::json::parse(body, nullptr, false);
+        if (document.is_discarded() || !document.is_object() || !document.contains("counts"))
+        {
+            std::cerr << "hydd: the API returned an unexpected tag-count response\n";
+            exit_code = 1;
+        }
+        else
+        {
+            const auto& counts = document.at("counts");
+            for (const auto& tag : tags)
+            {
+                const auto iterator = counts.find(tag);
+                if (iterator == counts.end())
+                {
+                    std::cout << tag << "\tunknown\n";
+                }
+                else
+                {
+                    std::cout << tag << "\t" << iterator->get<std::uint64_t>() << "\n";
                 }
             }
         }

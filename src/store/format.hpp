@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <string_view>
 
 namespace hyd {
 
@@ -15,6 +16,19 @@ constexpr char kHashesMagic[8] = { 'H', 'Y', 'D', 'H', 'A', 'S', 'H', '1' };
 constexpr char kMapsMagic[8] = { 'H', 'Y', 'D', 'M', 'A', 'P', '0', '1' };
 constexpr char kPairsMagic[8] = { 'H', 'Y', 'D', 'P', 'A', 'I', 'R', '1' };
 constexpr char kLegacyMagic[8] = { 'H', 'Y', 'D', 'L', 'E', 'G', '0', '1' };
+constexpr char kTagCountsMagic[8] = { 'H', 'Y', 'D', 'C', 'N', 'T', '0', '1' };
+constexpr char kTagLookupMagic[8] = { 'H', 'Y', 'D', 'T', 'I', 'X', '0', '1' };
+
+// counts.bin: magic, format, tag_count, reserved, built_at, then one u32
+// current-mapping count per tag id. 4 bytes per defined tag id.
+constexpr std::uint32_t kTagCountsFormat = 1;
+constexpr std::size_t kTagCountsHeader = 24;
+
+// tag_lookup.bin: magic, format, entry_count, reserved, then entry_count
+// pairs of (u32 fnv1a(tag text), u32 tag id) sorted by the hash. 8 bytes per
+// defined tag id; the tag id is verified against the tag dictionary on a hit.
+constexpr std::uint32_t kTagLookupFormat = 1;
+constexpr std::size_t kTagLookupHeader = 20;
 
 constexpr std::uint8_t kDeltaTagDefinition = 1;
 constexpr std::uint8_t kDeltaHashDefinition = 2;
@@ -84,6 +98,20 @@ inline bool legacy_hash_entry_less(const LegacyHashEntry& left, const LegacyHash
         return left.length < right.length;
     }
     return left.hash < right.hash;
+}
+
+// 32-bit FNV-1a over the tag text. Used only as a fast first-level key for
+// the tag-name lookup; every hit is verified against the tag dictionary, so
+// collisions cost an extra comparison and never a wrong answer.
+inline std::uint32_t tag_name_hash(std::string_view text)
+{
+    std::uint32_t hash = 2166136261u;
+    for (const unsigned char byte : text)
+    {
+        hash ^= byte;
+        hash *= 16777619u;
+    }
+    return hash;
 }
 
 inline LegacyHashEntry make_legacy_hash_entry(std::uint32_t hash_id,

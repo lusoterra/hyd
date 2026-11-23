@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(hyd VERSION 0.7.2 LANGUAGES CXX)
+project(hyd VERSION 0.8.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -36,6 +36,8 @@ add_library(hydcore STATIC
 
 target_include_directories(hydcore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
+target_compile_definitions(hydcore PUBLIC HYDD_VERSION="${PROJECT_VERSION}")
+
 target_link_libraries(hydcore PUBLIC
     CURL::libcurl
     OpenSSL::Crypto
@@ -51,7 +53,6 @@ target_compile_options(hydcore PRIVATE
 
 add_executable(hydd src/main.cpp)
 target_link_libraries(hydd PRIVATE hydcore)
-target_compile_definitions(hydd PRIVATE HYDD_VERSION="${PROJECT_VERSION}")
 target_compile_options(hydd PRIVATE -Wall -Wextra -Wpedantic -Wno-unused-parameter)
 
 include(GNUInstallDirs)

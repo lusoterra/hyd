@@ -182,6 +182,55 @@ std::vector<std::string> hashes_from_params(const nlohmann::json& params, bool& 
     return result;
 }
 
+std::vector<std::string> tags_from_params(const nlohmann::json& params, bool& malformed)
+{
+    malformed = false;
+    std::vector<std::string> result;
+    std::set<std::string> seen;
+
+    auto add = [&](const nlohmann::json& value) {
+        if (value.is_string())
+        {
+            const auto text = value.get<std::string>();
+            if (!text.empty() && seen.insert(text).second)
+            {
+                result.push_back(text);
+            }
+        }
+        else if (value.is_array())
+        {
+            for (const auto& item : value)
+            {
+                if (!item.is_string())
+                {
+                    malformed = true;
+                    return;
+                }
+                const auto text = item.get<std::string>();
+                if (!text.empty() && seen.insert(text).second)
+                {
+                    result.push_back(text);
+                }
+            }
+        }
+        else
+        {
+            malformed = true;
+        }
+    };
+
+    if (params.contains("tag"))
+    {
+        add(params.at("tag"));
+    }
+    if (params.contains("tags"))
+    {
+        add(params.at("tags"));
+    }
+
+    return result;
+}
+
 std::string method_path(const ApiRequest& request)
 {
     std::string path = request.path;
@@ -205,6 +254,21 @@ ApiHandlers::ApiHandlers(Config config, std::vector<std::string> access_keys, st
     boot_id_hex_ = hex_encode(random_bytes(32));
     const auto now = std::chrono::system_clock::now().time_since_epoch();
     boot_time_ = std::chrono::duration<double>(now).count();
+
+    rate_limit_enabled_ = config_.get_bool("rate_limit_enabled", true);
+    rate_limit_local_bypass_ = config_.get_bool("rate_limit_local_bypass", false);
+
+    const auto per_minute = config_.get_int("rate_limit_requests_per_minute", 600);
+    rate_per_second_ = per_minute > 0 ? static_cast<double>(per_minute) / 60.0 : 0.0;
+
+    const auto burst = config_.get_int("rate_limit_burst", 120);
+    rate_burst_ = static_cast<double>(std::max<std::int64_t>(1, burst));
+
+    if (rate_limit_enabled_ && rate_per_second_ <= 0.0)
+    {
+        HYD_LOG(warn, "rate_limit_requests_per_minute is not positive; disabling rate limiting");
+        rate_limit_enabled_ = false;
+    }
 }
 
 void ApiHandlers::set_store(std::shared_ptr<const TagSource> store)
@@ -401,6 +465,12 @@ bool ApiHandlers::authorize(const ApiRequest& request, const nlohmann::json& par
 
 ApiResponse ApiHandlers::handle(const ApiRequest& request)
 {
+    ApiResponse limited;
+    if (!rate_limit(request, limited))
+    {
+        return limited;
+    }
+
     try
     {
         return route(request);
@@ -410,6 +480,121 @@ ApiResponse ApiHandlers::handle(const ApiRequest& request)
         HYD_LOGF(error, "API error: %s", exception.what());
         return text_response(500, std::string("Internal error: ") + exception.what());
     }
+}
+
+std::string ApiHandlers::rate_limit_key(const ApiRequest& request) const
+{
+    for (const auto* name : { "hydrus-client-api-access-key", "hydrus-key",
+             "hydrus-client-api-session-key" })
+    {
+        if (const auto iterator = request.headers.find(name); iterator != request.headers.end())
+        {
+            if (!iterator->second.empty())
+            {
+                return "key:" + iterator->second;
+            }
+        }
+    }
+
+    for (const auto* name : { "access_key", "session_key" })
+    {
+        if (const auto iterator = request.query.find(name); iterator != request.query.end())
+        {
+            if (!iterator->second.empty())
+            {
+                return "key:" + iterator->second;
+            }
+        }
+    }
+
+    return {};
+}
+
+bool ApiHandlers::rate_limit(const ApiRequest& request, ApiResponse& failure)
+{
+    if (!rate_limit_enabled_)
+    {
+        return true;
+    }
+
+    if (rate_limit_local_bypass_ && is_loopback_address(request.remote_address))
+    {
+        return true;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    const auto key = rate_limit_key(request);
+
+    std::lock_guard<std::mutex> lock(rate_mutex_);
+
+    if (rate_buckets_.size() >= kMaxRateBuckets)
+    {
+        for (auto iterator = rate_buckets_.begin(); iterator != rate_buckets_.end();)
+        {
+            if (now - iterator->second.last > kRateBucketIdle)
+            {
+                iterator = rate_buckets_.erase(iterator);
+            }
+            else
+            {
+                ++iterator;
+            }
+        }
+        // Still full: drop everything rather than growing without bound. The
+        // worst case is a burst of fresh buckets for active clients.
+        if (rate_buckets_.size() >= kMaxRateBuckets)
+        {
+            rate_buckets_.clear();
+        }
+    }
+
+    // Charge the peer address always, and the access key too when one is
+    // supplied. Bucketing only by key would let a client rotate made-up keys
+    // to bypass the limit, since this check runs before authentication.
+    std::string peer_key = "ip:" + request.remote_address;
+    if (!consume_rate_token(peer_key, now, request, failure))
+    {
+        return false;
+    }
+
+    if (!key.empty() && !consume_rate_token(key, now, request, failure))
+    {
+        return false;
+    }
+
+    return true;
+}
+
+bool ApiHandlers::consume_rate_token(const std::string& key,
+    const std::chrono::steady_clock::time_point& now, const ApiRequest& request,
+    ApiResponse& failure)
+{
+    auto& bucket = rate_buckets_[key];
+    if (bucket.last == std::chrono::steady_clock::time_point {})
+    {
+        bucket.tokens = rate_burst_;
+    }
+    else
+    {
+        const double elapsed = std::chrono::duration<double>(now - bucket.last).count();
+        bucket.tokens = std::min(rate_burst_, bucket.tokens + elapsed * rate_per_second_);
+    }
+    bucket.last = now;
+
+    if (bucket.tokens >= 1.0)
+    {
+        bucket.tokens -= 1.0;
+        return true;
+    }
+
+    const double wait_seconds = (1.0 - bucket.tokens) / rate_per_second_;
+    const auto retry_after = static_cast<std::int64_t>(std::ceil(wait_seconds)) + 1;
+
+    failure = text_response(429, "rate limit exceeded; retry later");
+    failure.headers["Retry-After"] = std::to_string(std::max<std::int64_t>(1, retry_after));
+    HYD_LOGF(debug, "rate limit hit for %s (%.2f tokens)", request.remote_address.c_str(),
+        bucket.tokens);
+    return false;
 }
 
 ApiResponse ApiHandlers::route(const ApiRequest& request)
@@ -453,12 +638,12 @@ ApiResponse ApiHandlers::route(const ApiRequest& request)
         return ApiResponse { 200, "application/json", dump_json(body) };
     }
 
-    if (path == "/health")
+    if (path == "/hydd/health")
     {
         return ApiResponse { 200, "application/json", dump_json(health_json()) };
     }
 
-    if (path == "/stats")
+    if (path == "/hydd/stats")
     {
         ApiResponse failure;
         if (!authorize(request, nlohmann::json::object(), failure))
@@ -466,6 +651,12 @@ ApiResponse ApiHandlers::route(const ApiRequest& request)
             return failure;
         }
         return ApiResponse { 200, "application/json", dump_json(health_json()) };
+    }
+
+    if (path == "/health" || path == "/stats")
+    {
+        return text_response(404,
+            "hydd extensions moved under /hydd/ in 0.8.0: use /hydd/health or /hydd/stats.");
     }
 
     if (path == "/metadata")
@@ -546,6 +737,16 @@ ApiResponse ApiHandlers::route(const ApiRequest& request)
             return failure;
         }
         return handle_file_metadata(request, params);
+    }
+
+    if (path == "/hydd/tag_counts")
+    {
+        ApiResponse failure;
+        if (!authorize(request, params, failure))
+        {
+            return failure;
+        }
+        return handle_tag_counts(request, params);
     }
 
     if (path == "/get_files/file_hashes")
@@ -737,6 +938,80 @@ nlohmann::json ApiHandlers::metadata_row(std::span<const std::uint8_t> hash, con
     }
 
     return row;
+}
+
+ApiResponse ApiHandlers::handle_tag_counts(const ApiRequest& request, const nlohmann::json& params)
+{
+    (void)request;
+
+    if (!config_.get_bool("tag_counts_enabled", true))
+    {
+        return text_response(404,
+            "tag counts are disabled on this mirror; set tag_counts_enabled = true to enable them.");
+    }
+
+    const auto store = store_.load();
+    if (!store)
+    {
+        return text_response(503,
+            "hydd is still building its initial Public Tag Repository snapshot; try again later.");
+    }
+
+    if (!store->has_tag_counts())
+    {
+        return text_response(503,
+            "hydd is still building its tag counts; try again later.");
+    }
+
+    bool malformed = false;
+    const auto tags = tags_from_params(params, malformed);
+    if (malformed)
+    {
+        return text_response(400, "tags must be a string or a list of strings.");
+    }
+    if (tags.empty())
+    {
+        return text_response(400, "You have to specify a tag or tags to look up.");
+    }
+    if (tags.size() > 1000)
+    {
+        return text_response(400, "too many tags in one request (max 1000).");
+    }
+
+    nlohmann::json counts = nlohmann::json::object();
+    nlohmann::json unknown = nlohmann::json::array();
+
+    for (const auto& tag : tags)
+    {
+        if (tag.size() > 4096)
+        {
+            return text_response(400, "tag is too long.");
+        }
+
+        const auto count = store->tag_count(tag);
+        if (count)
+        {
+            counts[tag] = *count;
+        }
+        else
+        {
+            unknown.push_back(tag);
+        }
+    }
+
+    std::int64_t last_sync_at = 0;
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        last_sync_at = sync_state_.last_sync_at;
+    }
+
+    nlohmann::json body;
+    body["counts"] = std::move(counts);
+    body["unknown"] = std::move(unknown);
+    body["as_of"] = store->tag_counts_built_at();
+    body["last_sync_at"] = last_sync_at > 0 ? nlohmann::json(last_sync_at) : nlohmann::json(nullptr);
+
+    return ApiResponse { 200, "application/json", dump_json(body) };
 }
 
 ApiResponse ApiHandlers::handle_file_hashes(const ApiRequest& request, const nlohmann::json& params)
