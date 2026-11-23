@@ -54,6 +54,7 @@ private:
     ApiResponse handle_verify_access_key() const;
     ApiResponse handle_client_info() const;
     ApiResponse handle_tag_counts(const ApiRequest& request, const nlohmann::json& params);
+    ApiResponse handle_tag_hashes(const ApiRequest& request, const nlohmann::json& params);
     ApiResponse handle_repository_metadata(const ApiRequest& request);
     ApiResponse handle_repository_update(const ApiRequest& request);
 

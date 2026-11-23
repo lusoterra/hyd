@@ -43,6 +43,7 @@ partitions = 4
 sync_interval_seconds = 3600
 keep_update_cache = true
 rate_limit_requests_per_minute = 6000
+tag_hashes_enabled = true
 log_level = warn
 EOF
 
@@ -103,6 +104,16 @@ rm -f "${WORK}/data/store/counts.bin" "${WORK}/data/store/tag_lookup.bin"
 "${BIN}" -c "${WORK}/hydd.conf" --verify-store | grep -q '5 hashes'
 "${BIN}" -c "${WORK}/hydd.conf" --verify-store | grep -q '1 delta records' 2>/dev/null || true
 
+# Compaction rewrites the base and bumps the store generation; derived files
+# must be rewritten with it and stay correct.
+"${BIN}" -c "${WORK}/hydd.conf" --compact
+"${BIN}" -c "${WORK}/hydd.conf" --check-tag-counts | grep -q '0 mismatches'
+OUT=$("${BIN}" -c "${WORK}/hydd.conf" --query "${H2}")
+if echo "${OUT}" | grep -q 'series:alpha'; then
+    echo "deleted mapping survived compaction" >&2
+    exit 1
+fi
+
 # API checks.
 "${BIN}" -c "${WORK}/hydd.conf" --no-sync > "${WORK}/daemon.log" 2>&1 &
 DAEMON_PID=$!
@@ -160,6 +171,50 @@ echo "${GET_COUNTS}" | grep -q '"series:alpha":2'
 HELPER_COUNTS=$(HYD_BIN="${BIN}" HYD_CONFIG="${WORK}/hydd.conf" \
     "${ROOT}/contrib/hyd" counts "series:alpha")
 printf '%s\n' "${HELPER_COUNTS}" | grep -q 'series:alpha	2'
+
+# Reverse index: one tag -> paged hashes, with the deleted mapping applied.
+HASH_READY=0
+for _ in $(seq 1 100); do
+    if [ "$(curl -s -o /dev/null -w '%{http_code}' \
+        -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+        "${BASE}/hydd/tag_hashes?tag=series:alpha")" = "200" ]; then
+        HASH_READY=1
+        break
+    fi
+    sleep 0.1
+done
+[ "${HASH_READY}" = "1" ]
+
+PAGE=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    "${BASE}/hydd/tag_hashes?tag=series:alpha&limit=10")
+echo "${PAGE}" | grep -q '"total":2'
+echo "${PAGE}" | grep -q "${H1}"
+echo "${PAGE}" | grep -q "${L1}"
+echo "${PAGE}" | grep -q '"next_offset":null'
+if echo "${PAGE}" | grep -q "${H2}"; then
+    echo "deleted mapping leaked into the reverse index" >&2
+    exit 1
+fi
+
+PAGE_ONE=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    "${BASE}/hydd/tag_hashes?tag=series:alpha&offset=0&limit=1")
+echo "${PAGE_ONE}" | grep -q "${H1}"
+echo "${PAGE_ONE}" | grep -q '"next_offset":1'
+PAGE_TWO=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    "${BASE}/hydd/tag_hashes?tag=series:alpha&offset=1&limit=1")
+echo "${PAGE_TWO}" | grep -q "${L1}"
+echo "${PAGE_TWO}" | grep -q '"next_offset":null'
+EMPTY_PAGE=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    "${BASE}/hydd/tag_hashes?tag=series:alpha&offset=2&limit=1")
+echo "${EMPTY_PAGE}" | grep -q '"hashes":\[\]'
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    "${BASE}/hydd/tag_hashes?tag=no:such-tag")" = "404" ]
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    "${BASE}/hydd/tag_hashes?tag=series:alpha&limit=5000")" = "400" ]
+
+HELPER_HASHES=$(HYD_BIN="${BIN}" HYD_CONFIG="${WORK}/hydd.conf" \
+    "${ROOT}/contrib/hyd" hashes "series:alpha" 0 1 2>/dev/null)
+printf '%s\n' "${HELPER_HASHES}" | grep -q "${H1}"
 
 VERSION=$("${BIN}" --version | awk '{print $2}' | sed 's/^v//')
 [ "$("${BIN}" --version)" = "hyd v${VERSION}" ]
@@ -508,7 +563,7 @@ repository_url = http://127.0.0.1:${PORT_REPO}
 partitions = 4
 sync_interval_seconds = 3600
 rate_limit_requests_per_minute = 30
-rate_limit_burst = 4
+rate_limit_burst = 5
 tag_counts_enabled = false
 log_level = warn
 EOF
@@ -516,8 +571,9 @@ EOF
 DAEMON_PID=$!
 sleep 1
 
-# Disabled tag counts answer 404 (and consume one of the four burst tokens).
+# Disabled features answer 404 (each consumes one of the six burst tokens).
 [ "$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/hydd/tag_counts?tags=series:alpha")" = "404" ]
+[ "$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/hydd/tag_hashes?tag=series:alpha")" = "404" ]
 
 for _ in 1 2 3; do
     [ "$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/hydd/health")" = "200" ]

@@ -908,4 +908,97 @@ int run_tag_counts(const Config& config, const std::vector<std::string>& tags)
     return exit_code;
 }
 
+int run_tag_hashes(const Config& config, std::string_view tag,
+    std::int64_t offset, std::int64_t limit)
+{
+    if (tag.empty())
+    {
+        std::cerr << "hydd: --tag-hashes needs a tag\n";
+        return 2;
+    }
+    if (offset < 0 || limit < 1 || limit > 1000)
+    {
+        std::cerr << "hydd: invalid offset or limit\n";
+        return 2;
+    }
+
+    const std::string api_url = local_api_url(config);
+    const auto keys = local_api_keys(config);
+    const std::string path = "/hydd/tag_hashes?tag=" + percent_encode(tag)
+        + "&offset=" + std::to_string(offset)
+        + "&limit=" + std::to_string(limit);
+
+    HttpResponse response;
+    std::string last_error;
+    bool got_response = false;
+
+    HttpClient client(api_url, std::string(), "hydd-taghashes");
+    client.set_timeout_seconds(10);
+    client.set_retries(0);
+
+    std::vector<std::string> attempts = keys;
+    if (attempts.empty())
+    {
+        attempts.emplace_back();
+    }
+
+    for (std::size_t attempt = 0; attempt < attempts.size(); ++attempt)
+    {
+        client.set_api_access_key(attempts[attempt]);
+        if (client.get(path, response, last_error))
+        {
+            got_response = true;
+            break;
+        }
+
+        const bool auth_error = last_error.rfind("HTTP 401", 0) == 0
+            || last_error.rfind("HTTP 403", 0) == 0;
+        if (!auth_error || attempt + 1 >= attempts.size())
+        {
+            break;
+        }
+    }
+
+    int exit_code = 0;
+
+    if (!got_response)
+    {
+        std::cerr << "hydd: cannot reach the API at " << api_url << ": " << last_error << "\n";
+        exit_code = 1;
+    }
+    else
+    {
+        const std::string body(response.body.begin(), response.body.end());
+        auto document = nlohmann::json::parse(body, nullptr, false);
+        if (document.is_discarded() || !document.is_object() || !document.contains("hashes"))
+        {
+            std::cerr << "hydd: the API returned an unexpected tag-hash response\n";
+            exit_code = 1;
+        }
+        else
+        {
+            for (const auto& hash : document.at("hashes"))
+            {
+                if (hash.is_string())
+                {
+                    std::cout << hash.get<std::string>() << "\n";
+                }
+            }
+
+            const auto total = document.value("total", std::uint64_t { 0 });
+            if (document.contains("next_offset") && document.at("next_offset").is_number())
+            {
+                std::cerr << "total " << total << ", next offset "
+                          << document.at("next_offset").get<std::uint64_t>() << "\n";
+            }
+            else
+            {
+                std::cerr << "total " << total << ", end of results\n";
+            }
+        }
+    }
+
+    return exit_code;
+}
+
 } // namespace hyd

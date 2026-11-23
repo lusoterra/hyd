@@ -309,6 +309,12 @@ bool Config::finalize(std::string& error)
         }
     }
 
+    if (get_bool("tag_hashes_enabled", false) && !get_bool("tag_counts_enabled", true))
+    {
+        error = "tag_hashes_enabled requires tag_counts_enabled = true";
+        return false;
+    }
+
     return true;
 }
 
@@ -407,6 +413,7 @@ void Config::dump_effective() const
     HYD_LOGF(info, "tag_counts_enabled: %s", get_bool("tag_counts_enabled", true) ? "true" : "false");
     HYD_LOGF(info, "tag_counts_rebuild_after_sync: %s",
         get_bool("tag_counts_rebuild_after_sync", false) ? "true" : "false");
+    HYD_LOGF(info, "tag_hashes_enabled: %s", get_bool("tag_hashes_enabled", false) ? "true" : "false");
     HYD_LOGF(info, "require_localhost_key: %s", get_bool("require_localhost_key", false) ? "true" : "false");
     HYD_LOGF(info, "max_connections: %lld", static_cast<long long>(get_int("max_connections", 128)));
     HYD_LOGF(info, "rate_limit_enabled: %s", get_bool("rate_limit_enabled", true) ? "true" : "false");

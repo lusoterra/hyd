@@ -19,6 +19,15 @@ struct TagQueryResult
     std::vector<std::string> display_tags;
 };
 
+struct TagHashesPage
+{
+    std::uint64_t total = 0;
+    std::uint64_t offset = 0;
+    bool has_more = false;
+    std::uint64_t next_offset = 0;
+    std::vector<std::string> hashes;
+};
+
 // Common read-only interface for the custom store.
 class TagSource
 {
@@ -52,6 +61,18 @@ public:
     }
     virtual bool has_tag_counts() const { return false; }
     virtual std::int64_t tag_counts_built_at() const { return 0; }
+
+    // Reverse lookup (tag -> hashes). Off by default because the postings
+    // index is roughly one u32 per mapping plus a hash-id map.
+    virtual bool has_tag_hashes() const { return false; }
+    virtual std::optional<TagHashesPage> tag_hashes(std::string_view tag,
+        std::uint64_t offset, std::uint32_t limit) const
+    {
+        (void)tag;
+        (void)offset;
+        (void)limit;
+        return std::nullopt;
+    }
 };
 
 } // namespace hyd

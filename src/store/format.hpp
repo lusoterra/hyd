@@ -18,17 +18,32 @@ constexpr char kPairsMagic[8] = { 'H', 'Y', 'D', 'P', 'A', 'I', 'R', '1' };
 constexpr char kLegacyMagic[8] = { 'H', 'Y', 'D', 'L', 'E', 'G', '0', '1' };
 constexpr char kTagCountsMagic[8] = { 'H', 'Y', 'D', 'C', 'N', 'T', '0', '1' };
 constexpr char kTagLookupMagic[8] = { 'H', 'Y', 'D', 'T', 'I', 'X', '0', '1' };
+constexpr char kTagPostingsMagic[8] = { 'H', 'Y', 'D', 'P', 'O', 'S', 'T', '1' };
+constexpr char kHashIndexMagic[8] = { 'H', 'Y', 'D', 'H', 'I', 'D', 'X', '1' };
 
-// counts.bin: magic, format, tag_count, reserved, built_at, then one u32
-// current-mapping count per tag id. 4 bytes per defined tag id.
-constexpr std::uint32_t kTagCountsFormat = 1;
-constexpr std::size_t kTagCountsHeader = 24;
+// counts.bin: magic, format, tag_count, generation (u64), built_at (u64),
+// then one u32 current-mapping count per tag id. 4 bytes per defined tag id.
+constexpr std::uint32_t kTagCountsFormat = 2;
+constexpr std::size_t kTagCountsHeader = 32;
 
-// tag_lookup.bin: magic, format, entry_count, reserved, then entry_count
-// pairs of (u32 fnv1a(tag text), u32 tag id) sorted by the hash. 8 bytes per
-// defined tag id; the tag id is verified against the tag dictionary on a hit.
-constexpr std::uint32_t kTagLookupFormat = 1;
-constexpr std::size_t kTagLookupHeader = 20;
+// tag_lookup.bin: magic, format, entry_count, generation (u64), then pairs of
+// (u32 fnv1a(tag text), u32 tag id) sorted by the hash. 8 bytes per defined
+// tag id; the tag id is verified against the tag dictionary on a hit.
+constexpr std::uint32_t kTagLookupFormat = 2;
+constexpr std::size_t kTagLookupHeader = 24;
+
+// tag_postings.bin: magic, format, tag_count, generation (u64),
+// total_postings (u64), built_at (u64), then (tag_count + 1) u64 offsets,
+// then total_postings u32 hash ids. Each tag's hash ids are sorted ascending.
+// 4 bytes per mapping plus 8 bytes per defined tag.
+constexpr std::uint32_t kTagPostingsFormat = 2;
+constexpr std::size_t kTagPostingsHeader = 40;
+
+// hash_index.bin: magic, format, count, generation (u64), then one u64 per
+// hash id: 0 = absent, otherwise (partition << 32) | (entry_index + 1).
+// 8 bytes per defined hash. Lets a posting page resolve ids to hashes in O(1).
+constexpr std::uint32_t kHashIndexFormat = 2;
+constexpr std::size_t kHashIndexHeader = 24;
 
 constexpr std::uint8_t kDeltaTagDefinition = 1;
 constexpr std::uint8_t kDeltaHashDefinition = 2;

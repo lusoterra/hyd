@@ -18,6 +18,11 @@ struct StoreManifest
 {
     std::uint32_t format = kStoreFormatVersion;
     std::uint32_t partitions = 16;
+    // Bumped every time the base files are rewritten (initial build or
+    // compaction). Derived files (counts, tag names, postings) carry this and
+    // are ignored when it does not match, so a crash between the manifest and
+    // a derived file can never serve stale metadata.
+    std::uint64_t generation = 0;
     std::uint64_t hash_count = 0;
     std::uint64_t mapping_count = 0;
     std::uint64_t tag_count = 0;
@@ -62,6 +67,10 @@ public:
     bool has_tag_counts() const override;
     std::int64_t tag_counts_built_at() const override;
 
+    bool has_tag_hashes() const override;
+    std::optional<TagHashesPage> tag_hashes(std::string_view tag,
+        std::uint64_t offset, std::uint32_t limit) const override;
+
     std::optional<std::string> tag_string(std::uint32_t tag_id) const;
 
     const StoreManifest& manifest() const { return manifest_; }
@@ -92,6 +101,9 @@ public:
 
 private:
     struct Impl;
+
+    std::optional<std::uint32_t> resolve_tag_id(std::string_view tag) const;
+
     Impl* impl_;
     StoreManifest manifest_;
     DeltaData delta_;

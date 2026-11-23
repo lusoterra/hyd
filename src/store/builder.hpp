@@ -94,6 +94,10 @@ bool compact_store(const Config& config, const SyncCallbacks& callbacks, SyncSta
 // by --rebuild-tag-counts. Never modifies the base store or the delta journal.
 bool rebuild_tag_metadata(const Config& config, const SyncCallbacks& callbacks, std::string& error);
 
+// Builds tag_postings.bin and hash_index.bin, the reverse tag -> hashes index.
+// Requires counts.bin. Only called when tag_hashes_enabled is set.
+bool rebuild_tag_postings(const Config& config, const SyncCallbacks& callbacks, std::string& error);
+
 struct TagMetadataCheck
 {
     std::uint64_t tag_ids = 0;
@@ -101,6 +105,10 @@ struct TagMetadataCheck
     std::uint64_t mismatches = 0;
     std::uint64_t lookup_entries = 0;
     std::uint64_t expected_lookup_entries = 0;
+    std::uint64_t postings = 0;
+    std::uint64_t expected_postings = 0;
+    std::uint64_t hash_index_entries = 0;
+    std::uint64_t expected_hash_index_entries = 0;
 };
 
 // Recomputes the base counts and compares them with counts.bin without writing

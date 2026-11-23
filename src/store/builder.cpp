@@ -12,14 +12,20 @@
 #include <zlib.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
 #include <map>
 #include <fstream>
+#include <limits>
 #include <numeric>
+#include <sys/mman.h>
+#include <sys/stat.h>
 #include <thread>
+#include <unistd.h>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -402,15 +408,16 @@ bool write_partition_maps(const std::filesystem::path& path,
 // --- derived tag metadata (counts + name lookup) -------------------------
 
 bool write_tag_counts(const std::filesystem::path& path,
-    const std::vector<std::uint32_t>& counts, std::int64_t built_at, std::string& error)
+    const std::vector<std::uint32_t>& counts, std::uint64_t generation,
+    std::int64_t built_at, std::string& error)
 {
     Bytes data;
     data.resize(kTagCountsHeader + counts.size() * 4);
     std::memcpy(data.data(), kTagCountsMagic, 8);
     write_u32(data.data() + 8, kTagCountsFormat);
     write_u32(data.data() + 12, static_cast<std::uint32_t>(counts.size()));
-    write_u32(data.data() + 16, 0);
-    write_u64(data.data() + 20, static_cast<std::uint64_t>(built_at));
+    write_u64(data.data() + 16, generation);
+    write_u64(data.data() + 24, static_cast<std::uint64_t>(built_at));
     if (!counts.empty())
     {
         std::memcpy(data.data() + kTagCountsHeader, counts.data(), counts.size() * 4);
@@ -420,7 +427,8 @@ bool write_tag_counts(const std::filesystem::path& path,
 }
 
 bool write_tag_lookup(const std::filesystem::path& path,
-    std::vector<std::pair<std::uint32_t, std::uint32_t>>& rows, std::string& error)
+    std::vector<std::pair<std::uint32_t, std::uint32_t>>& rows, std::uint64_t generation,
+    std::string& error)
 {
     std::sort(rows.begin(), rows.end());
 
@@ -429,7 +437,7 @@ bool write_tag_lookup(const std::filesystem::path& path,
     std::memcpy(data.data(), kTagLookupMagic, 8);
     write_u32(data.data() + 8, kTagLookupFormat);
     write_u32(data.data() + 12, static_cast<std::uint32_t>(rows.size()));
-    write_u32(data.data() + 16, 0);
+    write_u64(data.data() + 16, generation);
     if (!rows.empty())
     {
         std::memcpy(data.data() + kTagLookupHeader, rows.data(), rows.size() * 8);
@@ -2095,6 +2103,7 @@ bool build_initial_store(const Config& config, const RepositoryMetadata& metadat
     StoreManifest manifest;
     manifest.format = kStoreFormatVersion;
     manifest.partitions = static_cast<std::uint32_t>(partitions);
+    manifest.generation = 1;
     manifest.hash_count = stats.hash_count;
     manifest.mapping_count = stats.mapping_count;
     manifest.tag_count = stats.tag_count;
@@ -2115,7 +2124,7 @@ bool build_initial_store(const Config& config, const RepositoryMetadata& metadat
 
     if (tag_counts_enabled)
     {
-        if (!write_tag_counts(store_dir / "counts.bin", tag_counts, manifest.built_at, error))
+        if (!write_tag_counts(store_dir / "counts.bin", tag_counts, manifest.generation, manifest.built_at, error))
         {
             return false;
         }
@@ -2126,7 +2135,7 @@ bool build_initial_store(const Config& config, const RepositoryMetadata& metadat
         {
             return false;
         }
-        if (!write_tag_lookup(store_dir / "tag_lookup.bin", lookup, error))
+        if (!write_tag_lookup(store_dir / "tag_lookup.bin", lookup, manifest.generation, error))
         {
             return false;
         }
@@ -2134,6 +2143,14 @@ bool build_initial_store(const Config& config, const RepositoryMetadata& metadat
         HYD_LOGF(info, "tag metadata built: %zu counts (%s), %zu tag names (%s)",
             tag_counts.size(), human_bytes(tag_counts.size() * 4).c_str(), lookup.size(),
             human_bytes(lookup.size() * 8).c_str());
+
+        if (config.get_bool("tag_hashes_enabled", false))
+        {
+            if (!rebuild_tag_postings(config, callbacks, error))
+            {
+                return false;
+            }
+        }
     }
 
     state.built = true;
@@ -2961,7 +2978,7 @@ bool rebuild_tag_metadata(const Config& config, const SyncCallbacks& callbacks, 
         HYD_LOGF(debug, "tag metadata: partition %zu/%zu scanned", p + 1, partitions);
     }
 
-    if (!write_tag_counts(store_dir / "counts.bin", tag_counts, now_unix(), error))
+    if (!write_tag_counts(store_dir / "counts.bin", tag_counts, manifest.generation, now_unix(), error))
     {
         return false;
     }
@@ -2972,7 +2989,7 @@ bool rebuild_tag_metadata(const Config& config, const SyncCallbacks& callbacks, 
     {
         return false;
     }
-    if (!write_tag_lookup(store_dir / "tag_lookup.bin", lookup, error))
+    if (!write_tag_lookup(store_dir / "tag_lookup.bin", lookup, manifest.generation, error))
     {
         return false;
     }
@@ -2980,6 +2997,14 @@ bool rebuild_tag_metadata(const Config& config, const SyncCallbacks& callbacks, 
     HYD_LOGF(info, "tag metadata rebuilt: %zu counts (%s), %zu tag names (%s)",
         tag_counts.size(), human_bytes(tag_counts.size() * 4).c_str(), lookup.size(),
         human_bytes(lookup.size() * 8).c_str());
+
+    if (config.get_bool("tag_hashes_enabled", false))
+    {
+        if (!rebuild_tag_postings(config, callbacks, error))
+        {
+            return false;
+        }
+    }
 
     return true;
 }
@@ -3038,6 +3063,11 @@ bool check_tag_metadata(const Config& config, const SyncCallbacks& callbacks,
         return false;
     }
     const std::uint32_t stored_len = read_u32(stored->data() + 12);
+    if (read_u64(stored->data() + 16) != manifest.generation)
+    {
+        error = "counts.bin belongs to a different store generation";
+        return false;
+    }
     if (stored_len != counts.size()
         || stored->size() < kTagCountsHeader + static_cast<std::size_t>(stored_len) * 4)
     {
@@ -3081,6 +3111,447 @@ bool check_tag_metadata(const Config& config, const SyncCallbacks& callbacks,
         return false;
     }
     result.lookup_entries = read_u32(lookup->data() + 12);
+    if (read_u64(lookup->data() + 16) != manifest.generation)
+    {
+        error = "tag_lookup.bin belongs to a different store generation";
+        return false;
+    }
+
+    if (config.get_bool("tag_hashes_enabled", false))
+    {
+        result.expected_postings = manifest.mapping_count;
+
+        auto postings = read_file(store_dir / "tag_postings.bin", error);
+        if (!postings)
+        {
+            return false;
+        }
+        if (postings->size() < kTagPostingsHeader
+            || std::memcmp(postings->data(), kTagPostingsMagic, 8) != 0
+            || read_u32(postings->data() + 8) != kTagPostingsFormat)
+        {
+            error = "tag_postings.bin has a bad header";
+            return false;
+        }
+        const std::uint32_t postings_tag_count = read_u32(postings->data() + 12);
+        const std::uint64_t postings_generation = read_u64(postings->data() + 16);
+        const std::uint64_t postings_total = read_u64(postings->data() + 24);
+        if (postings_generation != manifest.generation)
+        {
+            error = "tag_postings.bin belongs to a different store generation";
+            return false;
+        }
+        if (postings_tag_count != counts.size())
+        {
+            error = "tag_postings.bin has an unexpected tag count";
+            return false;
+        }
+        if (postings_total != manifest.mapping_count)
+        {
+            error = "tag_postings.bin has an unexpected mapping count";
+            return false;
+        }
+        const auto* postings_offsets = postings->data() + kTagPostingsHeader;
+        if (read_u64(postings_offsets + static_cast<std::size_t>(postings_tag_count) * 8)
+            != postings_total)
+        {
+            error = "tag_postings.bin has an inconsistent offset table";
+            return false;
+        }
+        const std::uint64_t expected_size = kTagPostingsHeader
+            + (static_cast<std::uint64_t>(postings_tag_count) + 1) * 8
+            + postings_total * 4;
+        if (postings->size() < expected_size)
+        {
+            error = "tag_postings.bin is truncated";
+            return false;
+        }
+        result.postings = postings_total;
+
+        auto index = read_file(store_dir / "hash_index.bin", error);
+        if (!index)
+        {
+            return false;
+        }
+        if (index->size() < kHashIndexHeader
+            || std::memcmp(index->data(), kHashIndexMagic, 8) != 0
+            || read_u32(index->data() + 8) != kHashIndexFormat)
+        {
+            error = "hash_index.bin has a bad header";
+            return false;
+        }
+        result.hash_index_entries = read_u32(index->data() + 12);
+        if (read_u64(index->data() + 16) != manifest.generation)
+        {
+            error = "hash_index.bin belongs to a different store generation";
+            return false;
+        }
+        const std::uint64_t index_size = kHashIndexHeader + result.hash_index_entries * 8;
+        if (index->size() < index_size)
+        {
+            error = "hash_index.bin is truncated";
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool rebuild_tag_postings(const Config& config, const SyncCallbacks& callbacks, std::string& error)
+{
+    const auto store_dir = config.store_dir();
+    const auto partitions = static_cast<std::size_t>(config.partitions());
+
+    StoreManifest manifest;
+    if (!load_store_manifest(store_dir, manifest, error))
+    {
+        return false;
+    }
+    if (manifest.partitions != static_cast<std::uint32_t>(partitions))
+    {
+        error = "cannot build tag postings: the store uses "
+            + std::to_string(manifest.partitions) + " partitions but the config uses "
+            + std::to_string(partitions);
+        return false;
+    }
+
+    auto counts_bytes = read_file(store_dir / "counts.bin", error);
+    if (!counts_bytes)
+    {
+        error = "cannot build tag postings without counts.bin: " + error;
+        return false;
+    }
+    if (counts_bytes->size() < kTagCountsHeader
+        || std::memcmp(counts_bytes->data(), kTagCountsMagic, 8) != 0
+        || read_u32(counts_bytes->data() + 8) != kTagCountsFormat)
+    {
+        error = "counts.bin has a bad header";
+        return false;
+    }
+    const std::uint32_t tag_count = read_u32(counts_bytes->data() + 12);
+    if (counts_bytes->size() < kTagCountsHeader + static_cast<std::size_t>(tag_count) * 4)
+    {
+        error = "counts.bin is truncated";
+        return false;
+    }
+    const auto* counts = counts_bytes->data() + kTagCountsHeader;
+
+    std::vector<std::uint64_t> offsets(static_cast<std::size_t>(tag_count) + 1, 0);
+    for (std::size_t i = 0; i < tag_count; ++i)
+    {
+        offsets[i + 1] = offsets[i] + read_u32(counts + i * 4);
+    }
+    const std::uint64_t total = offsets.back();
+
+    if (total != manifest.mapping_count)
+    {
+        error = "counts.bin totals " + std::to_string(total) + " mappings but the store has "
+            + std::to_string(manifest.mapping_count) + "; run --rebuild-tag-counts first";
+        return false;
+    }
+
+    const std::uint64_t offsets_bytes = (static_cast<std::uint64_t>(tag_count) + 1) * 8;
+    const std::uint64_t postings_bytes = total * 4;
+    const std::uint64_t file_size = kTagPostingsHeader + offsets_bytes + postings_bytes;
+
+    HYD_LOGF(info, "building tag postings: %llu mappings across %u tags (%s)",
+        static_cast<unsigned long long>(total), tag_count, human_bytes(file_size).c_str());
+
+    const auto final_path = store_dir / "tag_postings.bin";
+    const auto temporary = final_path.string() + ".tmp."
+        + std::to_string(::getpid()) + "." + hex_encode(random_bytes(8));
+
+    const int fd = ::open(temporary.c_str(), O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
+    if (fd < 0)
+    {
+        error = "cannot create " + temporary + ": " + errno_string(errno);
+        return false;
+    }
+
+    auto cleanup = [&] {
+        ::close(fd);
+        std::error_code ec;
+        std::filesystem::remove(temporary, ec);
+    };
+
+    if (file_size > static_cast<std::uint64_t>(std::numeric_limits<off_t>::max())
+        || ::ftruncate(fd, static_cast<off_t>(file_size)) != 0)
+    {
+        error = "cannot size " + temporary + ": " + errno_string(errno);
+        cleanup();
+        return false;
+    }
+
+    void* mapped = ::mmap(nullptr, static_cast<std::size_t>(file_size),
+        PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (mapped == MAP_FAILED)
+    {
+        error = "cannot mmap " + temporary + ": " + errno_string(errno);
+        cleanup();
+        return false;
+    }
+    auto* base = static_cast<std::uint8_t*>(mapped);
+
+    std::memcpy(base, kTagPostingsMagic, 8);
+    write_u32(base + 8, kTagPostingsFormat);
+    write_u32(base + 12, tag_count);
+    write_u64(base + 16, manifest.generation);
+    write_u64(base + 24, total);
+    write_u64(base + 32, static_cast<std::uint64_t>(now_unix()));
+    if (!offsets.empty())
+    {
+        std::memcpy(base + kTagPostingsHeader, offsets.data(), offsets_bytes);
+    }
+
+    auto* postings = reinterpret_cast<std::uint32_t*>(
+        base + kTagPostingsHeader + offsets_bytes);
+
+    std::vector<std::uint32_t> cursors(tag_count, 0);
+
+    for (std::size_t p = 0; p < partitions; ++p)
+    {
+        if (stopped(callbacks))
+        {
+            error = "stopped";
+            ::munmap(mapped, static_cast<std::size_t>(file_size));
+            cleanup();
+            return false;
+        }
+
+        char name[32];
+        std::snprintf(name, sizeof(name), "p%02zu", p);
+        const auto partition_dir = store_dir / name;
+
+        auto bytes = read_file(partition_dir / "maps.bin", error);
+        if (!bytes)
+        {
+            ::munmap(mapped, static_cast<std::size_t>(file_size));
+            cleanup();
+            return false;
+        }
+        if (bytes->size() < 20 || std::memcmp(bytes->data(), kMapsMagic, 8) != 0)
+        {
+            error = "maps.bin is truncated or invalid in " + partition_dir.string();
+            ::munmap(mapped, static_cast<std::size_t>(file_size));
+            cleanup();
+            return false;
+        }
+        const auto* data = bytes->data();
+        const std::uint32_t map_count = read_u32(data + 8);
+        const std::uint32_t map_tag_count = read_u32(data + 12);
+        const std::size_t expected = 20 + static_cast<std::size_t>(map_count) * 4
+            + (static_cast<std::size_t>(map_count) + 1) * 8
+            + static_cast<std::size_t>(map_tag_count) * 4;
+        if (bytes->size() < expected)
+        {
+            error = "maps.bin has an invalid count in " + partition_dir.string();
+            ::munmap(mapped, static_cast<std::size_t>(file_size));
+            cleanup();
+            return false;
+        }
+
+        const auto* hash_ids = data + 20;
+        const auto* map_offsets = hash_ids + static_cast<std::size_t>(map_count) * 4;
+        const auto* tag_ids = map_offsets + (static_cast<std::size_t>(map_count) + 1) * 8;
+
+        for (std::uint32_t i = 0; i < map_count; ++i)
+        {
+            const auto hash_id = read_u32(hash_ids + static_cast<std::size_t>(i) * 4);
+            const std::uint64_t begin = read_u64(map_offsets + static_cast<std::size_t>(i) * 8);
+            const std::uint64_t end = read_u64(map_offsets + (static_cast<std::size_t>(i) + 1) * 8);
+            if (begin > end || end > map_tag_count)
+            {
+                error = "maps.bin has an invalid tag range in " + partition_dir.string();
+                ::munmap(mapped, static_cast<std::size_t>(file_size));
+                cleanup();
+                return false;
+            }
+            for (std::uint64_t j = begin; j < end; ++j)
+            {
+                const auto tag_id = read_u32(tag_ids + j * 4);
+                if (tag_id >= tag_count)
+                {
+                    error = "mapping references tag id " + std::to_string(tag_id)
+                        + " beyond counts.bin; run --rebuild-tag-counts first";
+                    ::munmap(mapped, static_cast<std::size_t>(file_size));
+                    cleanup();
+                    return false;
+                }
+                const std::uint64_t position = offsets[tag_id] + cursors[tag_id];
+                if (position >= offsets[tag_id + 1])
+                {
+                    error = "counts.bin disagrees with maps.bin at tag id "
+                        + std::to_string(tag_id) + "; run --rebuild-tag-counts first";
+                    ::munmap(mapped, static_cast<std::size_t>(file_size));
+                    cleanup();
+                    return false;
+                }
+                postings[position] = hash_id;
+                ++cursors[tag_id];
+            }
+        }
+
+        HYD_LOGF(debug, "tag postings: partition %zu/%zu filled", p + 1, partitions);
+    }
+
+    for (std::size_t i = 0; i < tag_count; ++i)
+    {
+        if (cursors[i] != read_u32(counts + i * 4))
+        {
+            error = "counts.bin disagrees with maps.bin for tag id " + std::to_string(i);
+            ::munmap(mapped, static_cast<std::size_t>(file_size));
+            cleanup();
+            return false;
+        }
+    }
+
+    HYD_LOG(info, "tag postings: sorting per-tag hash id ranges");
+    for (std::size_t i = 0; i < tag_count; ++i)
+    {
+        if (stopped(callbacks))
+        {
+            error = "stopped";
+            ::munmap(mapped, static_cast<std::size_t>(file_size));
+            cleanup();
+            return false;
+        }
+        if (offsets[i + 1] > offsets[i] + 1)
+        {
+            std::sort(postings + offsets[i], postings + offsets[i + 1]);
+        }
+    }
+
+    if (::msync(mapped, static_cast<std::size_t>(file_size), MS_SYNC) != 0)
+    {
+        error = "cannot flush " + temporary + ": " + errno_string(errno);
+        ::munmap(mapped, static_cast<std::size_t>(file_size));
+        cleanup();
+        return false;
+    }
+    if (::munmap(mapped, static_cast<std::size_t>(file_size)) != 0)
+    {
+        error = "cannot unmap " + temporary + ": " + errno_string(errno);
+        cleanup();
+        return false;
+    }
+    if (::fsync(fd) != 0 || ::close(fd) != 0)
+    {
+        error = "cannot flush " + temporary + ": " + errno_string(errno);
+        std::error_code ec;
+        std::filesystem::remove(temporary, ec);
+        return false;
+    }
+
+    std::error_code ec;
+    std::filesystem::rename(temporary, final_path, ec);
+    if (ec)
+    {
+        error = "cannot replace " + final_path.string() + ": " + ec.message();
+        std::filesystem::remove(temporary, ec);
+        return false;
+    }
+    if (!fsync_directory(store_dir, error))
+    {
+        return false;
+    }
+
+    // hash id -> (partition, entry) so a page of postings can become hashes.
+    std::vector<std::uint64_t> hash_index;
+
+    for (std::size_t p = 0; p < partitions; ++p)
+    {
+        if (stopped(callbacks))
+        {
+            error = "stopped";
+            return false;
+        }
+        char name[32];
+        std::snprintf(name, sizeof(name), "p%02zu", p);
+        auto bytes = read_file(store_dir / name / "hashes.bin", error);
+        if (!bytes)
+        {
+            return false;
+        }
+        if (bytes->size() < 12 || std::memcmp(bytes->data(), kHashesMagic, 8) != 0)
+        {
+            error = "hashes.bin is truncated or invalid in " + std::string(name);
+            return false;
+        }
+        const std::uint32_t count = read_u32(bytes->data() + 8);
+        if (bytes->size() < 12 + static_cast<std::size_t>(count) * sizeof(HashEntry))
+        {
+            error = "hashes.bin has an invalid count in " + std::string(name);
+            return false;
+        }
+        for (std::uint32_t i = 0; i < count; ++i)
+        {
+            const auto hash_id = read_u32(bytes->data() + 12
+                + static_cast<std::size_t>(i) * sizeof(HashEntry) + 32);
+            if (hash_id >= hash_index.size())
+            {
+                hash_index.resize(static_cast<std::size_t>(hash_id) + 1, 0);
+            }
+            hash_index[hash_id] = (static_cast<std::uint64_t>(p) << 32)
+                | (static_cast<std::uint64_t>(i) + 1);
+        }
+        HYD_LOGF(debug, "hash id index: partition %zu/%zu scanned", p + 1, partitions);
+    }
+
+    // Legacy SHA-1/MD5 entries live outside the partitions; use a sentinel
+    // partition value and the legacy list index.
+    {
+        const auto legacy_path = store_dir / "legacy.bin";
+        if (path_exists(legacy_path))
+        {
+            auto bytes = read_file(legacy_path, error);
+            if (!bytes)
+            {
+                return false;
+            }
+            if (bytes->size() >= 12 && std::memcmp(bytes->data(), kLegacyMagic, 8) == 0)
+            {
+                const std::uint32_t count = read_u32(bytes->data() + 8);
+                if (bytes->size() >= 12 + static_cast<std::size_t>(count) * sizeof(LegacyHashEntry))
+                {
+                    for (std::uint32_t i = 0; i < count; ++i)
+                    {
+                        const auto* entry = bytes->data() + 12
+                            + static_cast<std::size_t>(i) * sizeof(LegacyHashEntry);
+                        LegacyHashEntry legacy;
+                        std::memcpy(&legacy, entry, sizeof(legacy));
+                        if (legacy.hash_id >= hash_index.size())
+                        {
+                            hash_index.resize(static_cast<std::size_t>(legacy.hash_id) + 1, 0);
+                        }
+                        hash_index[legacy.hash_id] = (std::uint64_t { 0xFFFFFFFFu } << 32)
+                            | (static_cast<std::uint64_t>(i) + 1);
+                    }
+                }
+            }
+        }
+    }
+
+    const std::uint64_t index_count = hash_index.size();
+    const std::uint64_t index_size = kHashIndexHeader + index_count * 8;
+    Bytes index_bytes;
+    index_bytes.resize(static_cast<std::size_t>(index_size));
+    std::memcpy(index_bytes.data(), kHashIndexMagic, 8);
+    write_u32(index_bytes.data() + 8, kHashIndexFormat);
+    write_u32(index_bytes.data() + 12, static_cast<std::uint32_t>(index_count));
+    write_u64(index_bytes.data() + 16, manifest.generation);
+    if (!hash_index.empty())
+    {
+        std::memcpy(index_bytes.data() + kHashIndexHeader, hash_index.data(), index_count * 8);
+    }
+
+    if (!write_file_atomic(store_dir / "hash_index.bin", index_bytes, error))
+    {
+        return false;
+    }
+
+    HYD_LOGF(info, "tag postings ready: %llu mappings (%s), %llu hash ids (%s)",
+        static_cast<unsigned long long>(total), human_bytes(postings_bytes).c_str(),
+        static_cast<unsigned long long>(index_count), human_bytes(index_size).c_str());
 
     return true;
 }
@@ -3413,6 +3884,7 @@ bool compact_store(const Config& config, const SyncCallbacks& callbacks, SyncSta
     hash_count += legacy_hashes.size();
     manifest.hash_count = hash_count;
     manifest.mapping_count = mapping_count;
+    manifest.generation += 1;
     if (!save_store_manifest(store_dir, manifest, error))
     {
         return false;
@@ -3424,22 +3896,28 @@ bool compact_store(const Config& config, const SyncCallbacks& callbacks, SyncSta
         // old counts plus the still-present delta journal still produce the
         // right answer, because the delta overlay in Store::open is
         // idempotent.
-        if (!write_tag_counts(store_dir / "counts.bin", tag_counts, now_unix(), error))
+        if (!write_tag_counts(store_dir / "counts.bin", tag_counts, manifest.generation, now_unix(), error))
         {
             return false;
         }
 
         std::vector<std::pair<std::uint32_t, std::uint32_t>> lookup;
-        if (!new_tags.empty() || !path_exists(store_dir / "tag_lookup.bin"))
+        // Always rewrite the name index: it carries the store generation, so
+        // skipping it would make Store::open ignore it after compaction. Only
+        // tags that are not yet in a manifested segment are added; delta.tags
+        // still contains them until the journal is removed.
+        std::unordered_map<std::uint32_t, std::string> extra_tags;
+        for (const auto& [tag_id, text] : new_tags)
         {
-            if (!collect_tag_lookup(store_dir, manifest, delta.tags, lookup, error))
-            {
-                return false;
-            }
-            if (!write_tag_lookup(store_dir / "tag_lookup.bin", lookup, error))
-            {
-                return false;
-            }
+            extra_tags.emplace(tag_id, text);
+        }
+        if (!collect_tag_lookup(store_dir, manifest, extra_tags, lookup, error))
+        {
+            return false;
+        }
+        if (!write_tag_lookup(store_dir / "tag_lookup.bin", lookup, manifest.generation, error))
+        {
+            return false;
         }
 
         if (!lookup.empty())
@@ -3452,6 +3930,14 @@ bool compact_store(const Config& config, const SyncCallbacks& callbacks, SyncSta
         {
             HYD_LOGF(info, "tag counts rebuilt: %zu entries (%s)", tag_counts.size(),
                 human_bytes(tag_counts.size() * 4).c_str());
+        }
+
+        if (config.get_bool("tag_hashes_enabled", false))
+        {
+            if (!rebuild_tag_postings(config, callbacks, error))
+            {
+                return false;
+            }
         }
     }
 

@@ -135,6 +135,30 @@ std::optional<std::string> json_param_string(const nlohmann::json& params, const
     return std::nullopt;
 }
 
+bool json_param_i64(const nlohmann::json& params, const char* key, std::int64_t& out)
+{
+    if (!params.contains(key))
+    {
+        return false;
+    }
+    const auto& value = params.at(key);
+    if (value.is_number_integer())
+    {
+        out = value.get<std::int64_t>();
+        return true;
+    }
+    if (value.is_string())
+    {
+        const auto parsed = parse_i64(value.get<std::string>());
+        if (parsed)
+        {
+            out = *parsed;
+            return true;
+        }
+    }
+    throw std::runtime_error(std::string(key) + " must be an integer");
+}
+
 std::vector<std::string> hashes_from_params(const nlohmann::json& params, bool& malformed)
 {
     malformed = false;
@@ -749,6 +773,16 @@ ApiResponse ApiHandlers::route(const ApiRequest& request)
         return handle_tag_counts(request, params);
     }
 
+    if (path == "/hydd/tag_hashes")
+    {
+        ApiResponse failure;
+        if (!authorize(request, params, failure))
+        {
+            return failure;
+        }
+        return handle_tag_hashes(request, params);
+    }
+
     if (path == "/get_files/file_hashes")
     {
         ApiResponse failure;
@@ -1010,6 +1044,90 @@ ApiResponse ApiHandlers::handle_tag_counts(const ApiRequest& request, const nloh
     body["unknown"] = std::move(unknown);
     body["as_of"] = store->tag_counts_built_at();
     body["last_sync_at"] = last_sync_at > 0 ? nlohmann::json(last_sync_at) : nlohmann::json(nullptr);
+
+    return ApiResponse { 200, "application/json", dump_json(body) };
+}
+
+ApiResponse ApiHandlers::handle_tag_hashes(const ApiRequest& request, const nlohmann::json& params)
+{
+    (void)request;
+
+    if (!config_.get_bool("tag_hashes_enabled", false))
+    {
+        return text_response(404,
+            "reverse tag search is disabled on this mirror; set tag_hashes_enabled = true to enable it.");
+    }
+
+    const auto store = store_.load();
+    if (!store)
+    {
+        return text_response(503,
+            "hydd is still building its initial Public Tag Repository snapshot; try again later.");
+    }
+
+    if (!store->has_tag_hashes())
+    {
+        return text_response(503,
+            "hydd is still building its reverse tag index; try again later.");
+    }
+
+    const auto tag = json_param_string(params, "tag");
+    if (!tag || tag->empty())
+    {
+        return text_response(400, "You have to specify a tag to look up.");
+    }
+    if (tag->size() > 4096)
+    {
+        return text_response(400, "tag is too long.");
+    }
+
+    std::int64_t offset = 0;
+    std::int64_t limit = 100;
+    try
+    {
+        if (json_param_i64(params, "offset", offset) && offset < 0)
+        {
+            return text_response(400, "offset must not be negative.");
+        }
+        if (json_param_i64(params, "limit", limit))
+        {
+            if (limit < 1 || limit > 1000)
+            {
+                return text_response(400, "limit must be between 1 and 1000.");
+            }
+        }
+    }
+    catch (const std::exception& exception)
+    {
+        return text_response(400, exception.what());
+    }
+
+    if (offset > 10000000)
+    {
+        return text_response(400,
+            "offset is too large for a single page; narrow the query or start from 0.");
+    }
+
+    const auto page = store->tag_hashes(*tag, static_cast<std::uint64_t>(offset),
+        static_cast<std::uint32_t>(limit));
+    if (!page)
+    {
+        return text_response(404, "that tag is not defined in this mirror.");
+    }
+
+    nlohmann::json hashes = nlohmann::json::array();
+    for (const auto& hash : page->hashes)
+    {
+        hashes.push_back(hash);
+    }
+
+    nlohmann::json body;
+    body["tag"] = *tag;
+    body["offset"] = page->offset;
+    body["limit"] = limit;
+    body["total"] = page->total;
+    body["hashes"] = std::move(hashes);
+    body["next_offset"] = page->has_more ? nlohmann::json(page->next_offset) : nlohmann::json(nullptr);
 
     return ApiResponse { 200, "application/json", dump_json(body) };
 }

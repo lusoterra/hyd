@@ -168,6 +168,16 @@ struct Store::Impl
     const std::uint8_t* lookup_entries = nullptr;
     std::uint32_t lookup_count = 0;
 
+    MappedFile postings;
+    const std::uint8_t* postings_offsets = nullptr;
+    const std::uint8_t* postings_ids = nullptr;
+    std::uint32_t postings_tag_count = 0;
+    std::uint64_t postings_total = 0;
+
+    MappedFile hash_index;
+    const std::uint8_t* hash_index_entries = nullptr;
+    std::uint64_t hash_index_count = 0;
+
     // Pending-delta adjustments to the base counts (tag id -> -N..+N).
     std::unordered_map<std::uint32_t, std::int32_t> count_overlay;
 
@@ -537,7 +547,14 @@ bool Store::open(const std::filesystem::path& store_dir, std::string& error)
             else
             {
                 const std::uint32_t count = read_u32(impl_->counts.data() + 12);
-                if (impl_->counts.size() < kTagCountsHeader + static_cast<std::size_t>(count) * 4)
+                const std::uint64_t generation = read_u64(impl_->counts.data() + 16);
+                if (generation != manifest_.generation)
+                {
+                    HYD_LOG(warn,
+                        "ignoring tag counts: they belong to an older store generation "
+                        "(run --rebuild-tag-counts)");
+                }
+                else if (impl_->counts.size() < kTagCountsHeader + static_cast<std::size_t>(count) * 4)
                 {
                     HYD_LOG(warn, "ignoring tag counts: truncated (run --rebuild-tag-counts)");
                 }
@@ -546,7 +563,7 @@ bool Store::open(const std::filesystem::path& store_dir, std::string& error)
                     impl_->count_entries = impl_->counts.data() + kTagCountsHeader;
                     impl_->count_len = count;
                     impl_->counts_built_at = static_cast<std::int64_t>(
-                        read_u64(impl_->counts.data() + 20));
+                        read_u64(impl_->counts.data() + 24));
                 }
             }
         }
@@ -575,7 +592,14 @@ bool Store::open(const std::filesystem::path& store_dir, std::string& error)
             else
             {
                 const std::uint32_t count = read_u32(impl_->tag_lookup.data() + 12);
-                if (impl_->tag_lookup.size() < kTagLookupHeader + static_cast<std::size_t>(count) * 8)
+                const std::uint64_t generation = read_u64(impl_->tag_lookup.data() + 16);
+                if (generation != manifest_.generation)
+                {
+                    HYD_LOG(warn,
+                        "ignoring tag name index: it belongs to an older store generation "
+                        "(run --rebuild-tag-counts)");
+                }
+                else if (impl_->tag_lookup.size() < kTagLookupHeader + static_cast<std::size_t>(count) * 8)
                 {
                     HYD_LOG(warn,
                         "ignoring tag name index: truncated (run --rebuild-tag-counts)");
@@ -584,6 +608,102 @@ bool Store::open(const std::filesystem::path& store_dir, std::string& error)
                 {
                     impl_->lookup_entries = impl_->tag_lookup.data() + kTagLookupHeader;
                     impl_->lookup_count = count;
+                }
+            }
+        }
+    }
+
+    impl_->postings = MappedFile {};
+    impl_->postings_offsets = nullptr;
+    impl_->postings_ids = nullptr;
+    impl_->postings_tag_count = 0;
+    impl_->postings_total = 0;
+
+    {
+        const auto path = store_dir / "tag_postings.bin";
+        if (path_exists(path))
+        {
+            std::string postings_error;
+            if (!impl_->postings.open(path, postings_error))
+            {
+                HYD_LOGF(warn, "ignoring tag postings: %s", postings_error.c_str());
+            }
+            else if (impl_->postings.size() < kTagPostingsHeader
+                || std::memcmp(impl_->postings.data(), kTagPostingsMagic, 8) != 0
+                || read_u32(impl_->postings.data() + 8) != kTagPostingsFormat)
+            {
+                HYD_LOG(warn,
+                    "ignoring tag postings: bad header (run --rebuild-tag-counts)");
+            }
+            else
+            {
+                const std::uint32_t tag_count = read_u32(impl_->postings.data() + 12);
+                const std::uint64_t generation = read_u64(impl_->postings.data() + 16);
+                const std::uint64_t total = read_u64(impl_->postings.data() + 24);
+                const std::uint64_t expected = kTagPostingsHeader
+                    + (static_cast<std::uint64_t>(tag_count) + 1) * 8 + total * 4;
+                if (generation != manifest_.generation)
+                {
+                    HYD_LOG(warn,
+                        "ignoring tag postings: they belong to an older store generation "
+                        "(run --rebuild-tag-counts)");
+                }
+                else if (impl_->postings.size() < expected)
+                {
+                    HYD_LOG(warn,
+                        "ignoring tag postings: truncated (run --rebuild-tag-counts)");
+                }
+                else
+                {
+                    impl_->postings_offsets = impl_->postings.data() + kTagPostingsHeader;
+                    impl_->postings_ids = impl_->postings_offsets
+                        + (static_cast<std::size_t>(tag_count) + 1) * 8;
+                    impl_->postings_tag_count = tag_count;
+                    impl_->postings_total = total;
+                }
+            }
+        }
+    }
+
+    impl_->hash_index = MappedFile {};
+    impl_->hash_index_entries = nullptr;
+    impl_->hash_index_count = 0;
+
+    {
+        const auto path = store_dir / "hash_index.bin";
+        if (path_exists(path))
+        {
+            std::string index_error;
+            if (!impl_->hash_index.open(path, index_error))
+            {
+                HYD_LOGF(warn, "ignoring hash id index: %s", index_error.c_str());
+            }
+            else if (impl_->hash_index.size() < kHashIndexHeader
+                || std::memcmp(impl_->hash_index.data(), kHashIndexMagic, 8) != 0
+                || read_u32(impl_->hash_index.data() + 8) != kHashIndexFormat)
+            {
+                HYD_LOG(warn,
+                    "ignoring hash id index: bad header (run --rebuild-tag-counts)");
+            }
+            else
+            {
+                const std::uint64_t count = read_u32(impl_->hash_index.data() + 12);
+                const std::uint64_t generation = read_u64(impl_->hash_index.data() + 16);
+                if (generation != manifest_.generation)
+                {
+                    HYD_LOG(warn,
+                        "ignoring hash id index: it belongs to an older store generation "
+                        "(run --rebuild-tag-counts)");
+                }
+                else if (impl_->hash_index.size() < kHashIndexHeader + count * 8)
+                {
+                    HYD_LOG(warn,
+                        "ignoring hash id index: truncated (run --rebuild-tag-counts)");
+                }
+                else
+                {
+                    impl_->hash_index_entries = impl_->hash_index.data() + kHashIndexHeader;
+                    impl_->hash_index_count = count;
                 }
             }
         }
@@ -757,13 +877,8 @@ std::int64_t Store::tag_counts_built_at() const
     return impl_->counts_built_at;
 }
 
-std::optional<std::uint64_t> Store::tag_count(std::string_view tag) const
+std::optional<std::uint32_t> Store::resolve_tag_id(std::string_view tag) const
 {
-    if (!open_ || impl_->count_entries == nullptr)
-    {
-        return std::nullopt;
-    }
-
     std::optional<std::uint32_t> tag_id;
 
     if (impl_->lookup_entries != nullptr)
@@ -810,6 +925,17 @@ std::optional<std::uint64_t> Store::tag_count(std::string_view tag) const
         }
     }
 
+    return tag_id;
+}
+
+std::optional<std::uint64_t> Store::tag_count(std::string_view tag) const
+{
+    if (!open_ || impl_->count_entries == nullptr)
+    {
+        return std::nullopt;
+    }
+
+    const auto tag_id = resolve_tag_id(tag);
     if (!tag_id)
     {
         return std::nullopt;
@@ -827,6 +953,185 @@ std::optional<std::uint64_t> Store::tag_count(std::string_view tag) const
     }
 
     return static_cast<std::uint64_t>(std::max<std::int64_t>(0, count));
+}
+
+bool Store::has_tag_hashes() const
+{
+    return open_ && impl_->count_entries != nullptr && impl_->lookup_entries != nullptr
+        && impl_->postings_ids != nullptr && impl_->hash_index_entries != nullptr;
+}
+
+std::optional<TagHashesPage> Store::tag_hashes(std::string_view tag,
+    std::uint64_t offset, std::uint32_t limit) const
+{
+    if (!has_tag_hashes())
+    {
+        return std::nullopt;
+    }
+
+    const auto tag_id = resolve_tag_id(tag);
+    if (!tag_id || *tag_id >= impl_->postings_tag_count)
+    {
+        return std::nullopt;
+    }
+
+    const std::uint64_t begin = read_u64(impl_->postings_offsets + static_cast<std::size_t>(*tag_id) * 8);
+    const std::uint64_t end = read_u64(
+        impl_->postings_offsets + (static_cast<std::size_t>(*tag_id) + 1) * 8);
+    if (begin > end || end > impl_->postings_total)
+    {
+        return std::nullopt;
+    }
+
+    const auto total = tag_count(tag);
+    if (!total)
+    {
+        return std::nullopt;
+    }
+
+    std::unordered_set<std::uint32_t> removed;
+    for (const auto key : delta_.mapping_deletions)
+    {
+        const auto hash_id = static_cast<std::uint32_t>(key >> 32);
+        const auto deleted_tag = static_cast<std::uint32_t>(key & 0xffffffffu);
+        if (deleted_tag == *tag_id && delta_.deleted_files.count(hash_id) == 0)
+        {
+            removed.insert(hash_id);
+        }
+    }
+
+    std::vector<std::uint32_t> added;
+    for (const auto& [hash_id, tags] : delta_.mapping_additions)
+    {
+        if (delta_.deleted_files.count(hash_id) != 0 || removed.count(hash_id) != 0)
+        {
+            continue;
+        }
+        if (std::find(tags.begin(), tags.end(), *tag_id) != tags.end())
+        {
+            added.push_back(hash_id);
+        }
+    }
+    std::sort(added.begin(), added.end());
+    added.erase(std::unique(added.begin(), added.end()), added.end());
+
+    auto resolve_hash = [this](std::uint32_t hash_id) -> std::optional<std::string> {
+        if (static_cast<std::uint64_t>(hash_id) >= impl_->hash_index_count)
+        {
+            return std::nullopt;
+        }
+        const std::uint64_t entry = read_u64(
+            impl_->hash_index_entries + static_cast<std::size_t>(hash_id) * 8);
+        if (entry == 0)
+        {
+            return std::nullopt;
+        }
+        const auto partition = static_cast<std::uint32_t>(entry >> 32);
+        const auto index = static_cast<std::uint64_t>(entry & 0xffffffffu) - 1;
+
+        if (partition == 0xFFFFFFFFu)
+        {
+            if (index >= impl_->legacy_count)
+            {
+                return std::nullopt;
+            }
+            LegacyHashEntry legacy = legacy_entry_at(impl_->legacy_entries, static_cast<std::size_t>(index));
+            return hex_encode(std::span<const std::uint8_t>(legacy.hash.data(), legacy.length));
+        }
+
+        if (partition >= impl_->partitions.size())
+        {
+            return std::nullopt;
+        }
+        const auto& files = impl_->partitions[partition];
+        if (index >= files.hash_count)
+        {
+            return std::nullopt;
+        }
+        const auto* entry_bytes = files.hash_entries + static_cast<std::size_t>(index) * sizeof(HashEntry);
+        return hex_encode(std::span<const std::uint8_t>(entry_bytes, kHashSize));
+    };
+
+    std::vector<std::string> page;
+    page.reserve(std::min<std::uint64_t>(limit, 4096));
+
+    std::size_t base_index = static_cast<std::size_t>(begin);
+    std::size_t add_index = 0;
+    std::uint64_t seen = 0;
+    bool has_more = false;
+
+    auto next_base = [&]() -> std::optional<std::uint32_t> {
+        while (base_index < end)
+        {
+            const auto hash_id = read_u32(impl_->postings_ids + base_index * 4);
+            ++base_index;
+            if (delta_.deleted_files.count(hash_id) != 0 || removed.count(hash_id) != 0)
+            {
+                continue;
+            }
+            return hash_id;
+        }
+        return std::nullopt;
+    };
+
+    auto base_value = next_base();
+    std::optional<std::uint32_t> add_value;
+    if (add_index < added.size())
+    {
+        add_value = added[add_index++];
+    }
+
+    while (base_value || add_value)
+    {
+        std::uint32_t value = 0;
+        if (base_value && (!add_value || *base_value < *add_value))
+        {
+            value = *base_value;
+            base_value = next_base();
+        }
+        else if (add_value && (!base_value || *add_value < *base_value))
+        {
+            value = *add_value;
+            add_value = add_index < added.size()
+                ? std::optional<std::uint32_t>(added[add_index++])
+                : std::nullopt;
+        }
+        else
+        {
+            value = *base_value;
+            base_value = next_base();
+            add_value = add_index < added.size()
+                ? std::optional<std::uint32_t>(added[add_index++])
+                : std::nullopt;
+        }
+
+        if (seen < offset)
+        {
+            ++seen;
+            continue;
+        }
+        if (page.size() >= limit)
+        {
+            has_more = true;
+            break;
+        }
+
+        const auto hash = resolve_hash(value);
+        if (!hash)
+        {
+            return std::nullopt;
+        }
+        page.push_back(*hash);
+        ++seen;
+    }
+
+    TagHashesPage result;
+    result.total = *total;
+    result.offset = offset;
+    result.has_more = has_more;
+    result.next_offset = offset + page.size();
+    result.hashes = std::move(page);
+    return result;
 }
 
 TagQueryResult Store::lookup(std::span<const std::uint8_t> hash) const
@@ -1162,6 +1467,7 @@ bool load_store_manifest(const std::filesystem::path& store_dir, StoreManifest& 
         manifest.hash_count = root.value("hash_count", static_cast<std::uint64_t>(0));
         manifest.mapping_count = root.value("mapping_count", static_cast<std::uint64_t>(0));
         manifest.tag_count = root.value("tag_count", static_cast<std::uint64_t>(0));
+        manifest.generation = root.value("generation", static_cast<std::uint64_t>(0));
         manifest.built_at = root.value("built_at", static_cast<std::int64_t>(0));
         manifest.tag_segments.clear();
 
@@ -1214,6 +1520,7 @@ bool save_store_manifest(const std::filesystem::path& store_dir, const StoreMani
     root["hash_count"] = manifest.hash_count;
     root["mapping_count"] = manifest.mapping_count;
     root["tag_count"] = manifest.tag_count;
+    root["generation"] = manifest.generation;
     root["built_at"] = manifest.built_at;
     root["tag_segments"] = nlohmann::json::array();
 

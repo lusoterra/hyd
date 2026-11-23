@@ -66,6 +66,9 @@ struct Options
     bool rebuild_tag_counts = false;
     bool check_tag_counts = false;
     std::vector<std::string> tag_count_tags;
+    std::optional<std::string> tag_hashes_tag;
+    std::int64_t tag_hashes_offset = 0;
+    std::int64_t tag_hashes_limit = 100;
     bool print_access_key = false;
     std::string query_hash;
 };
@@ -94,6 +97,9 @@ void print_help()
         "      --rebuild-tag-counts   Rebuild the derived tag counts and tag name index and exit\n"
         "      --check-tag-counts     Verify the derived tag counts and tag name index and exit\n"
         "      --tag-counts TAG       Query the running API for mapping counts (repeatable)\n"
+        "      --tag-hashes TAG       Query the running API for the hashes of one tag\n"
+        "      --hash-offset N        Page offset for --tag-hashes (default 0)\n"
+        "      --hash-limit N         Page size for --tag-hashes (1-1000, default 100)\n"
         "      --print-access-key     Print every configured API access key and exit\n"
         "      --log-level LEVEL      trace, debug, info, warn, error, off\n"
         "  -h, --help                 Show this help\n"
@@ -126,6 +132,9 @@ std::optional<Options> parse_options(int argc, char** argv, std::string& error)
         { "rebuild-tag-counts", no_argument, nullptr, 1011 },
         { "check-tag-counts", no_argument, nullptr, 1012 },
         { "tag-counts", required_argument, nullptr, 1013 },
+        { "tag-hashes", required_argument, nullptr, 1014 },
+        { "hash-offset", required_argument, nullptr, 1015 },
+        { "hash-limit", required_argument, nullptr, 1016 },
         { "help", no_argument, nullptr, 'h' },
         { "version", no_argument, nullptr, 'V' },
         { nullptr, 0, nullptr, 0 },
@@ -206,6 +215,31 @@ std::optional<Options> parse_options(int argc, char** argv, std::string& error)
             case 1013:
                 options.tag_count_tags.emplace_back(optarg);
                 break;
+            case 1014:
+                options.tag_hashes_tag = std::string(optarg);
+                break;
+            case 1015:
+            {
+                const auto value = hyd::parse_i64(optarg);
+                if (!value || *value < 0)
+                {
+                    error = "invalid --hash-offset";
+                    return std::nullopt;
+                }
+                options.tag_hashes_offset = *value;
+                break;
+            }
+            case 1016:
+            {
+                const auto value = hyd::parse_i64(optarg);
+                if (!value || *value < 1 || *value > 1000)
+                {
+                    error = "invalid --hash-limit (1-1000)";
+                    return std::nullopt;
+                }
+                options.tag_hashes_limit = *value;
+                break;
+            }
             case 'h':
                 print_help();
                 exit(0);
@@ -467,6 +501,8 @@ void build_tag_metadata_if_needed(Runtime& runtime, bool force)
         return;
     }
 
+    const bool hashes_enabled = runtime.config.get_bool("tag_hashes_enabled", false);
+
     std::shared_ptr<const hyd::TagSource> store;
     {
         std::lock_guard<std::mutex> lock(runtime.store_mutex);
@@ -476,7 +512,7 @@ void build_tag_metadata_if_needed(Runtime& runtime, bool force)
     {
         return;
     }
-    if (!force && store->has_tag_counts())
+    if (!force && store->has_tag_counts() && (!hashes_enabled || store->has_tag_hashes()))
     {
         return;
     }
@@ -586,6 +622,12 @@ int main(int argc, char** argv)
     if (!options->tag_count_tags.empty())
     {
         return hyd::run_tag_counts(runtime.config, options->tag_count_tags);
+    }
+
+    if (options->tag_hashes_tag)
+    {
+        return hyd::run_tag_hashes(runtime.config, *options->tag_hashes_tag,
+            options->tag_hashes_offset, options->tag_hashes_limit);
     }
 
     hyd::log_set_level(hyd::log_level_from_string(runtime.config.get_string("log_level", "info")));
@@ -895,11 +937,21 @@ int main(int argc, char** argv)
 
         std::cout << "tag metadata: " << result.checked << " counts checked, "
                   << result.mismatches << " mismatches, " << result.lookup_entries
-                  << "/" << result.expected_lookup_entries << " name entries\n";
+                  << "/" << result.expected_lookup_entries << " name entries";
+        if (result.expected_postings > 0)
+        {
+            std::cout << ", " << result.postings << "/" << result.expected_postings
+                      << " postings, " << result.hash_index_entries << " hash ids";
+        }
+        std::cout << "\n";
 
-        return (result.mismatches == 0 && result.lookup_entries == result.expected_lookup_entries)
-            ? 0
-            : 1;
+        bool ok = result.mismatches == 0
+            && result.lookup_entries == result.expected_lookup_entries;
+        if (result.expected_postings > 0)
+        {
+            ok = ok && result.postings == result.expected_postings;
+        }
+        return ok ? 0 : 1;
     }
 
     if (options->sync_once)
