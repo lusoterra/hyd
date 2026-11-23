@@ -45,18 +45,31 @@ The commented default file is [`contrib/hydd.conf`](contrib/hydd.conf). The main
 | `listen_address` / `listen_port` | `127.0.0.1` / `45869` | API listener |
 | `access_key` / `access_key_file` | generated | One or more API keys; comma-separated in config, one per line in the file |
 | `require_localhost_key` | `false` | Require a valid key even on loopback (disables localhost trust) |
-| `repository_url` | `https://ptr.hydrus.network:45871` | Upstream PTR |
+| `repository_url` | `https://ptr.hydrus.network:45871` | Upstream Hydrus repository; must use `https` (plain `http` is accepted only on loopback) |
 | `partitions` | `16` | Custom-store partitions, power of two |
 | `compaction_enabled` | `true` | Merge the custom store's delta journal |
 | `compact_after_delta_mb` | `512` | Automatic compaction threshold |
 | `sync_interval_seconds` | `3600` | Metadata check interval |
 | `download_workers` | `8` | Parallel update downloads (1-32) |
+| `max_download_bytes` | `68719476736` (64 GiB) | Abort a sync after this many downloaded bytes; `0` means unlimited |
 | `log_file` | `/var/log/hyd/hyd.log` | Set empty for stderr only |
 | `log_rotate_mb` | `10` | Rotate when the plaintext log reaches this size |
 | `log_rotate_keep` | `5` | Number of compressed old logs to keep |
 | `log_rotate_compress` | `true` | Gzip rotated logs |
 | `keep_update_cache` | `false` | Keep downloaded update files (also enables the relay and cache repair) |
 | `repair_enabled` | `true` | Verify cached update files on sync and heal corruption automatically |
+
+### Repository trust
+
+`hydd` treats `repository_url` as its source of truth. Syncing requires `https`; a plain `http` upstream is refused unless the host is loopback, so a local test repository still works. TLS is the only transport authentication the Hydrus repository ecosystem provides, so do not disable it with a reverse proxy or a plain-HTTP upstream.
+
+Within that channel:
+
+- every update file is checked against the SHA-256 listed in the repository metadata before it is cached or used;
+- cached files are re-hashed before being skipped, and a corrupt entry is deleted and downloaded again;
+- malformed updates, unknown serialisable versions/types/actions, out-of-range ids, invalid metadata indices, and oversized responses abort the sync pass instead of being skipped silently.
+
+That is integrity checking, not authenticity. The repository metadata is not signed, so a host you point at can choose which hashes and tags are "correct". If you sync from the official PTR you are trusting the PTR over TLS. If you point `repository_url` at another `hydd`, or at any other Hydrus server, you are trusting that operator with the complete contents of your mirror. The relay is a transport mirror, not a trust anchor: a client that syncs from your `hydd` applies the same checks against the metadata your `hydd` serves. The shared PTR access key is public and is an account credential, not a secret or a way to verify the server.
 
 ### Storage
 

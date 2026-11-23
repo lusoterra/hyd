@@ -48,7 +48,12 @@ Human-readable tag service name. Default
 .TP
 .B repository_url ", " repository_access_key
 Upstream Hydrus repository. The defaults are the real PTR and its shared
-read-only key.
+read-only key. The URL must use
+.IR https ;
+plain
+.I http
+is accepted only when the host is loopback, which is useful for a local test
+repository. Syncing over plain HTTP to any other host is refused.
 .TP
 .B sync_enabled
 Enable or disable all repository syncing. Default true.
@@ -115,9 +120,13 @@ Gzip old logs. Default true.
 One of trace, debug, info, warn, error, off. Default info.
 .TP
 .B max_download_bytes ", " max_update_index
-Test/development limits. A partial store is produced when
-.B max_update_index
-is set. Automated tests against the real PTR must stay under 10 GiB.
+Abort a sync after
+.I max_download_bytes
+have been downloaded in total. The default is 68719476736 (64 GiB), about
+three times the current PTR corpus; zero means unlimited. Together with
+.IR max_update_index ,
+this produces a deliberately partial store for testing. Automated tests
+against the real PTR must stay under 10 GiB.
 .SH FILES
 .I /etc/hydd.conf
 .SH SEE ALSO
