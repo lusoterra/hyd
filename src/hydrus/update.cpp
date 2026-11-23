@@ -57,6 +57,16 @@ std::uint32_t checked_id(std::int64_t value)
     return static_cast<std::uint32_t>(value);
 }
 
+std::uint32_t checked_hash_id(std::int64_t value)
+{
+    if (value < 0 || value > static_cast<std::int64_t>(kMaxHashId))
+    {
+        throw std::runtime_error("hash id out of range: " + std::to_string(value)
+            + " (limit " + std::to_string(kMaxHashId) + ")");
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
 } // namespace
 
 struct UpdateParser::Impl
@@ -143,15 +153,19 @@ bool UpdateParser::parse(std::span<const std::uint8_t> compressed, UpdateVisitor
                         return false;
                     }
 
-                    const auto id = checked_id(pair.at(0).get_int64().value());
+                    const auto raw_id = pair.at(0).get_int64().value();
 
                     if (definition_type == kDefinitionsTypeHashes)
                     {
+                        // Hash ids have their own bound so the partition
+                        // membership bitmap cannot be forced to allocate
+                        // hundreds of megabytes by one bogus definition.
+                        const auto hash_id = checked_hash_id(raw_id);
                         const auto encoded = pair.at(1).get_string().value();
                         const auto hash = hash_from_hex(encoded);
                         if (hash)
                         {
-                            visitor.on_hash_definition(id, *hash);
+                            visitor.on_hash_definition(hash_id, *hash);
                             ++rows_processed_;
                             continue;
                         }
@@ -159,7 +173,7 @@ bool UpdateParser::parse(std::span<const std::uint8_t> compressed, UpdateVisitor
                         const auto decoded = hex_decode(encoded);
                         if (!decoded || decoded->empty())
                         {
-                            error = "invalid hash definition for hash id " + std::to_string(id);
+                            error = "invalid hash definition for hash id " + std::to_string(hash_id);
                             return false;
                         }
 
@@ -168,23 +182,23 @@ bool UpdateParser::parse(std::span<const std::uint8_t> compressed, UpdateVisitor
                             if (!is_known_invalid_hash(encoded))
                             {
                                 error = "unsupported " + std::to_string(decoded->size())
-                                    + "-byte hash definition for hash id " + std::to_string(id)
+                                    + "-byte hash definition for hash id " + std::to_string(hash_id)
                                     + "; refusing to skip it";
                                 return false;
                             }
 
-                            visitor.on_invalid_hash_definition(id, encoded);
+                            visitor.on_invalid_hash_definition(hash_id, encoded);
                             continue;
                         }
 
                         // The PTR has a handful of legacy SHA-1/MD5 file
                         // hashes. They get their own index instead of being
                         // mixed with the SHA-256 hashes.
-                        visitor.on_unsupported_hash_definition(id, encoded);
+                        visitor.on_unsupported_hash_definition(hash_id, encoded);
                     }
                     else if (definition_type == kDefinitionsTypeTags)
                     {
-                        visitor.on_tag_definition(id, pair.at(1).get_string().value());
+                        visitor.on_tag_definition(checked_id(raw_id), pair.at(1).get_string().value());
                         ++rows_processed_;
                     }
                 }
@@ -260,7 +274,7 @@ bool UpdateParser::parse(std::span<const std::uint8_t> compressed, UpdateVisitor
 
                         for (const auto& hash_id_value : hash_ids)
                         {
-                            const auto hash_id = checked_id(hash_id_value.get_int64().value());
+                            const auto hash_id = checked_hash_id(hash_id_value.get_int64().value());
                             if (is_add)
                             {
                                 visitor.on_mapping_add(tag_id, hash_id);
@@ -285,7 +299,7 @@ bool UpdateParser::parse(std::span<const std::uint8_t> compressed, UpdateVisitor
                                 error = "malformed file row in content update";
                                 return false;
                             }
-                            const auto hash_id = checked_id(fields.at(0).get_int64().value());
+                            const auto hash_id = checked_hash_id(fields.at(0).get_int64().value());
                             // A file add carries no tag data. Presence is
                             // already defined by the hash definitions, so this
                             // is intentionally a no-op rather than a skip.
@@ -297,7 +311,7 @@ bool UpdateParser::parse(std::span<const std::uint8_t> compressed, UpdateVisitor
                     {
                         for (const auto& hash_id_value : data)
                         {
-                            const auto hash_id = checked_id(hash_id_value.get_int64().value());
+                            const auto hash_id = checked_hash_id(hash_id_value.get_int64().value());
                             visitor.on_file_delete(hash_id);
                             ++rows_processed_;
                         }

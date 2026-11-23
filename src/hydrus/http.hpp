@@ -5,6 +5,7 @@
 #include <curl/curl.h>
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -34,6 +35,10 @@ public:
     void set_retries(int retries) { retries_ = retries; }
     void set_api_access_key(std::string key) { api_access_key_ = std::move(key); }
 
+    // Bound a single response body. Metadata and update files use different
+    // limits; the default is the largest accepted update file.
+    void set_max_body_bytes(std::size_t bytes) { max_body_bytes_ = bytes; }
+
     static void global_init();
     static void global_cleanup();
 
@@ -48,6 +53,7 @@ private:
     long timeout_seconds_ = 120;
     std::uint64_t rate_limit_kib_ = 0;
     int retries_ = 3;
+    std::size_t max_body_bytes_ = 256u * 1024u * 1024u;
 };
 
 } // namespace hyd

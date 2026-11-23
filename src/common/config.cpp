@@ -3,6 +3,7 @@
 #include "common/log.hpp"
 #include "common/util.hpp"
 
+#include <cctype>
 #include <fstream>
 #include <sstream>
 
@@ -13,6 +14,89 @@ namespace {
 constexpr const char* kDefaultRepositoryUrl = "https://ptr.hydrus.network:45871";
 constexpr const char* kDefaultRepositoryAccessKey =
     "4a285629721ca442541ef2c15ea17d1f7f7578b0c3f4f5f2a05f8f0ab297786f";
+// The current PTR corpus is roughly 21 GiB. A finite default stops a broken
+// or hostile upstream from filling the disk before the operator notices.
+constexpr std::int64_t kDefaultMaxDownloadBytes = 64ll * 1024 * 1024 * 1024;
+
+std::string lower_ascii(std::string value)
+{
+    for (char& character : value)
+    {
+        character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+    }
+    return value;
+}
+
+bool repository_url_scheme_and_host(const std::string& url, std::string& scheme, std::string& host)
+{
+    const auto separator = url.find("://");
+    if (separator == std::string::npos || separator == 0)
+    {
+        return false;
+    }
+
+    scheme = lower_ascii(url.substr(0, separator));
+
+    std::string authority = url.substr(separator + 3);
+    const auto authority_end = authority.find_first_of("/?#");
+    if (authority_end != std::string::npos)
+    {
+        authority.resize(authority_end);
+    }
+
+    const auto userinfo = authority.rfind('@');
+    if (userinfo != std::string::npos)
+    {
+        authority.erase(0, userinfo + 1);
+    }
+
+    if (authority.empty())
+    {
+        return false;
+    }
+
+    if (authority.front() == '[')
+    {
+        const auto close = authority.find(']');
+        if (close == std::string::npos)
+        {
+            return false;
+        }
+        host = lower_ascii(authority.substr(1, close - 1));
+    }
+    else
+    {
+        const auto colon = authority.find(':');
+        host = lower_ascii(authority.substr(0, colon));
+    }
+
+    return !host.empty();
+}
+
+bool is_loopback_host(const std::string& host)
+{
+    if (host == "localhost" || host == "::1" || host == "0:0:0:0:0:0:0:1")
+    {
+        return true;
+    }
+
+    // Accept 127.x.y.z only as a numeric literal. This deliberately rejects
+    // DNS names such as 127.example.com that merely start with "127.".
+    if (host.rfind("127.", 0) != 0)
+    {
+        return false;
+    }
+
+    for (std::size_t i = 4; i < host.size(); ++i)
+    {
+        if (!std::isdigit(static_cast<unsigned char>(host[i])) && host[i] != '.')
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
 
 std::string strip_inline_comment(const std::string& value)
 {
@@ -166,6 +250,41 @@ bool Config::finalize(std::string& error)
         return false;
     }
 
+    std::string repository_scheme;
+    std::string repository_host;
+    if (!repository_url_scheme_and_host(repository_url(), repository_scheme, repository_host))
+    {
+        error = "repository_url must be an absolute URL such as "
+                "https://ptr.hydrus.network:45871";
+        return false;
+    }
+
+    if (repository_scheme == "https")
+    {
+        // Fine. TLS is the transport authentication the ecosystem relies on.
+    }
+    else if (repository_scheme == "http" && is_loopback_host(repository_host))
+    {
+        HYD_LOGF(warn,
+            "repository_url %s is plain http on loopback; only use this for a "
+            "local test repository",
+            repository_url().c_str());
+    }
+    else
+    {
+        error = "repository_url must use https (got " + repository_scheme + "://"
+            + repository_host + "); syncing over plain http lets a network "
+              "attacker replace repository data";
+        return false;
+    }
+
+    const auto max_download = parse_i64(get_string("max_download_bytes", ""));
+    if (max_download && *max_download < 0)
+    {
+        error = "max_download_bytes must be zero (unlimited) or a positive byte count";
+        return false;
+    }
+
     return true;
 }
 
@@ -228,8 +347,21 @@ int Config::partitions() const
 
 std::uint64_t Config::max_download_bytes() const
 {
-    const auto value = get_int("max_download_bytes", 0);
-    return value <= 0 ? 0 : static_cast<std::uint64_t>(value);
+    const auto text = get_string("max_download_bytes");
+    if (text.empty())
+    {
+        return static_cast<std::uint64_t>(kDefaultMaxDownloadBytes);
+    }
+
+    const auto value = parse_i64(text);
+    if (!value || *value <= 0)
+    {
+        // Zero (or an unparsable value already rejected by finalize) means
+        // no limit.
+        return 0;
+    }
+
+    return static_cast<std::uint64_t>(*value);
 }
 
 void Config::dump_effective() const
@@ -242,6 +374,11 @@ void Config::dump_effective() const
     HYD_LOGF(info, "sync_on_start: %s", get_bool("sync_on_start", true) ? "true" : "false");
     HYD_LOGF(info, "sync_interval_seconds: %lld", static_cast<long long>(sync_interval_seconds()));
     HYD_LOGF(info, "partitions: %d", partitions());
+    const auto download_cap = max_download_bytes();
+    const std::string download_cap_text = download_cap == 0
+        ? std::string("unlimited")
+        : human_bytes(download_cap);
+    HYD_LOGF(info, "max_download_bytes: %s", download_cap_text.c_str());
     HYD_LOGF(info, "keep_update_cache: %s", get_bool("keep_update_cache", false) ? "true" : "false");
     HYD_LOGF(info, "require_localhost_key: %s", get_bool("require_localhost_key", false) ? "true" : "false");
     HYD_LOGF(info, "log_level: %s", get_string("log_level", "info").c_str());

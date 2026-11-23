@@ -16,18 +16,23 @@ namespace {
 std::atomic<bool> g_curl_initialized { false };
 std::once_flag g_curl_init_once;
 
+struct BodySink
+{
+    Bytes* body = nullptr;
+    std::size_t limit = 0;
+};
+
 std::size_t write_callback(char* data, std::size_t size, std::size_t count, void* userdata)
 {
-    auto* body = static_cast<Bytes*>(userdata);
+    auto* sink = static_cast<BodySink*>(userdata);
     const std::size_t total = size * count;
-    // Per-file cap: legitimate update files are a few MB compressed.
-    // Abort the transfer instead of buffering gigabytes from a bad mirror.
-    constexpr std::size_t kMaxBodyBytes = 256u * 1024u * 1024u;
-    if (body->size() + total > kMaxBodyBytes)
+    // Abort the transfer instead of buffering a huge response from a bad
+    // mirror. The caller picks the limit for its request type.
+    if (sink->body->size() + total > sink->limit)
     {
         return 0;
     }
-    body->insert(body->end(),
+    sink->body->insert(sink->body->end(),
         reinterpret_cast<std::uint8_t*>(data),
         reinterpret_cast<std::uint8_t*>(data) + total);
     return total;
@@ -116,8 +121,9 @@ bool HttpClient::perform(const std::string& url, HttpResponse& response, std::st
     // redirects; libcurl only strips Authorization by default.
     curl_easy_setopt(handle, CURLOPT_HEADEROPT, CURLHEADER_SEPARATE);
     curl_easy_setopt(handle, CURLOPT_HTTPHEADER, headers);
+    BodySink sink { &response.body, max_body_bytes_ };
     curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, write_callback);
-    curl_easy_setopt(handle, CURLOPT_WRITEDATA, &response.body);
+    curl_easy_setopt(handle, CURLOPT_WRITEDATA, &sink);
     curl_easy_setopt(handle, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(handle, CURLOPT_MAXREDIRS, 5L);
     curl_easy_setopt(handle, CURLOPT_CONNECTTIMEOUT, 30L);
@@ -148,7 +154,8 @@ bool HttpClient::perform(const std::string& url, HttpResponse& response, std::st
     {
         if (result == CURLE_WRITE_ERROR)
         {
-            error = "download exceeds the 256 MiB per-file cap; refusing it";
+            error = "response exceeds the " + std::to_string(max_body_bytes_)
+                + "-byte cap; refusing it";
         }
         else
         {

@@ -1,4 +1,5 @@
 #include "common/log.hpp"
+#include "common/config.hpp"
 #include "common/util.hpp"
 #include "hydrus/repository.hpp"
 #include "hydrus/update.hpp"
@@ -197,6 +198,13 @@ int main()
 
         result = parse(R"([34, 1, [[3, [[0, [[5]]]]]]])", file_visitor);
         assert(result.first && file_visitor.added == 1);
+
+        // A hash id near the uint32 maximum would force the partition bitmap
+        // to allocate hundreds of megabytes. Reject it at parse time.
+        const std::string huge_id = "[36, 1, [[0, [[1000000001, \""
+            + std::string(64, 'a') + "\"]]]]]";
+        result = parse(huge_id, null_visitor);
+        assert(!result.first && result.second.find("hash id out of range") != std::string::npos);
     }
 
     {
@@ -218,6 +226,79 @@ int main()
             R"([21, 2, [[[0, "metadata_slice"], [2, [37, 2, [[], 1800000000]]]]]])",
             metadata, metadata_error));
         assert(metadata_error.find("metadata_slice has unsupported version") != std::string::npos);
+
+        // Indices are non-negative and begin/end are a sane time range.
+        RepositoryMetadata invalid_metadata;
+
+        assert(!parse_repository_metadata_json(
+            R"([21, 2, [[[0, "metadata_slice"], [2, [37, 1, [[-1, [], 10, 20]], 1800000000]]]]]])",
+            invalid_metadata, metadata_error));
+        assert(metadata_error.find("negative update index") != std::string::npos);
+
+        assert(!parse_repository_metadata_json(
+            R"([21, 2, [[[0, "metadata_slice"], [2, [37, 1, [[0, [], 30, 20]], 1800000000]]]]]])",
+            invalid_metadata, metadata_error));
+        assert(metadata_error.find("invalid update time range") != std::string::npos);
+
+        assert(parse_repository_metadata_json(
+            R"([21, 2, [[[0, "metadata_slice"], [2, [37, 1, [[0, [], 10, 20]], 1800000000]]]]]])",
+            invalid_metadata, metadata_error));
+        assert(invalid_metadata.updates.size() == 1);
+    }
+
+    {
+        // Syncing must use TLS. Plain HTTP is only accepted on loopback, for
+        // a local test repository.
+        const auto directory = std::filesystem::temp_directory_path()
+            / ("hyd-config-test-" + std::to_string(::getpid()));
+        std::error_code ec;
+        std::filesystem::remove_all(directory, ec);
+        std::filesystem::create_directories(directory);
+        const auto path = directory / "hydd.conf";
+
+        auto write_config = [&](const std::string& url) {
+            std::ofstream file(path, std::ios::trunc);
+            file << "data_dir = " << (directory / "data").string() << "\n";
+            file << "repository_url = " << url << "\n";
+        };
+
+        Config config;
+        std::string config_error;
+
+        write_config("http://example.com:45871");
+        assert(config.load(path, true, config_error));
+        assert(!config.finalize(config_error));
+        assert(config_error.find("must use https") != std::string::npos);
+
+        // A DNS name that merely starts with 127. is not loopback.
+        write_config("http://127.evil.example:45871");
+        assert(config.load(path, true, config_error));
+        assert(!config.finalize(config_error));
+
+        write_config("ftp://example.com:45871");
+        assert(config.load(path, true, config_error));
+        assert(!config.finalize(config_error));
+
+        write_config("http://127.0.0.1:45871");
+        assert(config.load(path, true, config_error));
+        assert(config.finalize(config_error));
+
+        write_config("https://ptr.hydrus.network:45871");
+        assert(config.load(path, true, config_error));
+        assert(config.finalize(config_error));
+
+        // The default cap is finite; zero explicitly disables it.
+        write_config("https://ptr.hydrus.network:45871\nmax_download_bytes = 0\n");
+        assert(config.load(path, true, config_error));
+        assert(config.finalize(config_error));
+        assert(config.max_download_bytes() == 0);
+
+        write_config("https://ptr.hydrus.network:45871\n");
+        assert(config.load(path, true, config_error));
+        assert(config.finalize(config_error));
+        assert(config.max_download_bytes() == 64ull * 1024 * 1024 * 1024);
+
+        std::filesystem::remove_all(directory, ec);
     }
 
     {
@@ -237,7 +318,7 @@ int main()
             { "sync_enabled", true },
             { "sync_interval_seconds", 3600 },
             { "service_name", "public tag repository" },
-            { "hyd_version", "0.7.1" },
+            { "hyd_version", "0.7.2" },
             { "hashes", 206154409 },
             { "sha256_hashes", 206154408 },
             { "legacy_hashes", 1 },

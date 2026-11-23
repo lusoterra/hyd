@@ -1652,6 +1652,14 @@ bool build_initial_store(const Config& config, const RepositoryMetadata& metadat
             }
         }
 
+        if (max_hash_id > kMaxHashId)
+        {
+            error = "repository hash id " + std::to_string(max_hash_id)
+                + " exceeds the supported maximum " + std::to_string(kMaxHashId)
+                + "; refusing to allocate the partition bitmap";
+            return false;
+        }
+
         std::vector<std::uint64_t> membership;
         membership.assign(max_hash_id / 64 + 2, 0);
         for (const auto& entry : hash_entries)

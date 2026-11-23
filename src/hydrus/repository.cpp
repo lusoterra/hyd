@@ -16,6 +16,15 @@ constexpr int kSerialisableTypeHydrusArgs = 21;
 constexpr std::int64_t kHydrusArgsVersion = 2;
 constexpr std::int64_t kMetadataVersion = 1;
 
+// A metadata slice only lists update indices and their sha256 hashes. The
+// current PTR slice is a few MiB; 64 MiB leaves room to grow while refusing a
+// server that tries to make us buffer a huge JSON document.
+constexpr std::size_t kMaxMetadataBytes = 64u * 1024u * 1024u;
+
+// Legitimate update files are a few MiB compressed. Keep the per-file cap
+// separate so a metadata request cannot use the larger update budget.
+constexpr std::size_t kMaxUpdateFileBytes = 256u * 1024u * 1024u;
+
 } // namespace
 
 std::int64_t RepositoryMetadata::highest_index() const
@@ -79,6 +88,8 @@ RepositoryClient::RepositoryClient(std::string base_url, std::string access_key)
 
 bool RepositoryClient::fetch_metadata(std::int64_t since, RepositoryMetadata& metadata, std::string& error)
 {
+    http_.set_max_body_bytes(kMaxMetadataBytes);
+
     HttpResponse response;
     if (!http_.get("/metadata?since=" + std::to_string(since), response, error))
     {
@@ -90,6 +101,8 @@ bool RepositoryClient::fetch_metadata(std::int64_t since, RepositoryMetadata& me
 
 bool RepositoryClient::fetch_update(const Hash& hash, Bytes& compressed_body, std::string& error)
 {
+    http_.set_max_body_bytes(kMaxUpdateFileBytes);
+
     const std::string path = "/update?update_hash=" + hex_encode(hash);
     HttpResponse response;
     if (!http_.get(path, response, error))
@@ -221,6 +234,21 @@ bool parse_repository_metadata_json(std::string_view json_text, RepositoryMetada
             update.begin = row.at(2).get<std::int64_t>();
             update.end = row.at(3).get<std::int64_t>();
 
+            // Indices are a non-negative sequence and begin/end are unix
+            // timestamps. The official server only ever emits sane values;
+            // reject nonsense instead of carrying it into the stored metadata.
+            if (update.index < 0)
+            {
+                error = "metadata_slice contains a negative update index";
+                return false;
+            }
+
+            if (update.begin < 0 || update.end < update.begin)
+            {
+                error = "metadata_slice contains an invalid update time range";
+                return false;
+            }
+
             for (const auto& encoded_hash : row.at(1))
             {
                 const auto hash = hash_from_hex(encoded_hash.get<std::string>());
@@ -276,6 +304,18 @@ bool load_repository_metadata_file(const std::filesystem::path& path, Repository
             update.index = row.at(0).get<std::int64_t>();
             update.begin = row.at(1).get<std::int64_t>();
             update.end = row.at(2).get<std::int64_t>();
+
+            if (update.index < 0)
+            {
+                error = "stored repository metadata contains a negative update index";
+                return false;
+            }
+
+            if (update.begin < 0 || update.end < update.begin)
+            {
+                error = "stored repository metadata contains an invalid update time range";
+                return false;
+            }
 
             for (const auto& encoded_hash : row.at(3))
             {

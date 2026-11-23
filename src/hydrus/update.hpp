@@ -7,6 +7,13 @@
 
 namespace hyd {
 
+// Hash ids are assigned monotonically by the repository. The PTR is around
+// 206 million in 2026; this bound leaves years of headroom while preventing a
+// bogus definition from forcing the partition membership bitmap to allocate
+// hundreds of megabytes. The builder also re-checks this to reject an old
+// checkpoint that carries a larger value.
+inline constexpr std::uint32_t kMaxHashId = 1000000000u;
+
 enum class UpdateKind
 {
     unknown = 0,
