@@ -10,8 +10,6 @@ Instructions for agents working in this repository.
   `max_update_index` in the test config. Do not run a full sync "just to see if
   it works" on a development machine.
 - Do not delete anything outside the repository without asking the user first.
-- Arch packaging lives outside this repository at `../_PKGBUILD/hyd-git`,
-  which is its own git repository. Do not add it back to this tree.
 
 ## Build
 
@@ -57,7 +55,6 @@ no network access. See `tests/integration.sh`.
 - Cache repair may only rewrite files under the update cache. It must never
   modify the query store, and it must stay bounded (no repair loop on every
   request).
-- Do not add PostgreSQL support yet; it is explicitly deferred.
 - Logging must stay at `/var/log/hyd/hyd.log` by default, rotate at 10 MiB,
   keep 5 gzipped files, and remain configurable.
 - Update downloads must reuse TLS connections and stay parallel by default.

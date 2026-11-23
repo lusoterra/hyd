@@ -121,7 +121,7 @@ It does not:
 - implement file search, tag editing, uploads, petitions, or any mutation;
 - implement Hydrus accounts, registration, account types, permissions, bandwidth/rate limits, janitor review, or voting/petitions;
 - keep the full Hydrus client or server schema, so its data directory cannot be dropped into Hydrus;
-- terminate TLS, or implement PostgreSQL.
+- terminate TLS.
 
 The PTR is a Hydrus server with no real website of its own. The official Python client is the UI. Reading is available through a shared read-only access key; uploading tags, deletions, and sibling/parent changes require an account and janitor approval. There is no upvote system - "voting" in Hydrus means mapping/parent/sibling petitions that janitors approve or deny. That account-and-client requirement, plus permissions, rate limits, and janitor review, is the main spam control. `hydd` uses only the read-only public key and never writes.
 
@@ -141,7 +141,7 @@ A read-only relay is still good for decentralisation: it serves the same update 
 - `access_key` accepts one key or a comma-separated list; `access_key_file` accepts one key per line, with blank lines and `#` comments ignored. Removing a key and restarting revokes it (sessions live in memory, so they are cleared by the restart). `hydd --print-access-key` prints every configured key.
 - `contrib/hyd` (installed as `/usr/bin/hyd`) is a small helper: `hyd FILE` hashes with SHA-256 by default and queries its tags, `hyd --sha1 FILE` and `hyd --md5 FILE` select a legacy hash, `hyd HASH` queries a hash directly, and `hyd stats`, `hyd scan`, `hyd repair`, `hyd verify`, `hyd version` cover the rest. Set `HYD_BIN` or `HYD_CONFIG` to override the defaults. `hydd --api-query HASH` is the underlying API-backed lookup.
 - `hydd --scan-updates` re-parses every cached update file, verifies its sha256 against the cache filename, and reports all format failures at once. Run it after a large download and before a long build, or after a Hydrus update.
-- Hydrus uses SQLite, but a Hydrus client database is split across several files with a client-specific schema and carries file metadata and history; hydd's store is a smaller read-only mirror schema, not a byte-compatible client or server database. PostgreSQL is not implemented.
+- Hydrus uses SQLite, but a Hydrus client database is split across several files with a client-specific schema and carries file metadata and history; hydd's store is a smaller read-only mirror schema, not a byte-compatible client or server database.
 - At the time of writing the PTR has about 4.18 billion mappings, 206 million SHA-256 hashes, and 55 million tags. A full initial sync downloads roughly 21 GiB of already-compressed update files; keep extra free space for the store being built.
 - The first store build is CPU and I/O heavy because it replays every update file once for definitions and once per partition for mappings. Incremental syncs are small. The build writes a checkpoint after the definitions pass and after each partition; if it is interrupted, the next start finishes that same update snapshot and only then applies newer indices as an incremental delta. A publication that happens during a long build or while the daemon is stopped therefore does not invalidate the checkpoint. A changed update snapshot, partition count, or store format still forces a rebuild.
 
