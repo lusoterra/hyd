@@ -26,7 +26,12 @@ name="hyd-$version"
 archive="$name.tar.gz"
 signature="$archive.asc"
 
-if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+    if [ "$(git rev-parse "$tag^{commit}")" != "$(git rev-parse HEAD)" ]; then
+        echo "error: tag $tag does not point at HEAD" >&2
+        exit 1
+    fi
+else
     echo "note: tag $tag does not exist yet; create and sign it with:" >&2
     echo "      git tag -s $tag" >&2
     echo
@@ -43,7 +48,8 @@ echo "Sign the tarball:"
 echo "  gpg --detach-sign --armor $archive"
 echo
 echo "Then upload the source tarball and signature to GitHub:"
-echo "  gh release create $tag $archive $signature --title $tag --notes-file <notes>"
+echo "  gh release create $tag $archive $signature --title $tag --generate-notes"
+echo "  (or attach both files in the GitHub web UI and write your own notes)"
 echo
 echo "PKGBUILD sha256sums entry:"
 echo "  $sha256"
