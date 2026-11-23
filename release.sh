@@ -47,9 +47,5 @@ echo
 echo "Sign the tarball:"
 echo "  gpg --detach-sign --armor $archive"
 echo
-echo "Then upload the source tarball and signature to GitHub:"
-echo "  gh release create $tag $archive $signature --title $tag --generate-notes"
-echo "  (or attach both files in the GitHub web UI and write your own notes)"
-echo
 echo "PKGBUILD sha256sums entry:"
 echo "  $sha256"
