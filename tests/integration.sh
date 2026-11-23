@@ -43,7 +43,6 @@ partitions = 4
 sync_interval_seconds = 3600
 keep_update_cache = true
 rate_limit_requests_per_minute = 6000
-tag_hashes_enabled = true
 log_level = warn
 EOF
 
@@ -98,6 +97,9 @@ rm -f "${WORK}/data/store/counts.bin" "${WORK}/data/store/tag_lookup.bin"
 [ -f "${WORK}/data/store/counts.bin" ]
 [ -f "${WORK}/data/store/tag_lookup.bin" ]
 "${BIN}" -c "${WORK}/hydd.conf" --check-tag-counts | grep -q '0 mismatches'
+# Reverse files must not exist while tag_hashes_enabled is off (the default).
+[ ! -e "${WORK}/data/store/tag_postings.bin" ]
+[ ! -e "${WORK}/data/store/hash_index.bin" ]
 # Remove them again so the daemon has to rebuild them at startup.
 rm -f "${WORK}/data/store/counts.bin" "${WORK}/data/store/tag_lookup.bin"
 
@@ -108,6 +110,8 @@ rm -f "${WORK}/data/store/counts.bin" "${WORK}/data/store/tag_lookup.bin"
 # must be rewritten with it and stay correct.
 "${BIN}" -c "${WORK}/hydd.conf" --compact
 "${BIN}" -c "${WORK}/hydd.conf" --check-tag-counts | grep -q '0 mismatches'
+[ ! -e "${WORK}/data/store/tag_postings.bin" ]
+[ ! -e "${WORK}/data/store/hash_index.bin" ]
 OUT=$("${BIN}" -c "${WORK}/hydd.conf" --query "${H2}")
 if echo "${OUT}" | grep -q 'series:alpha'; then
     echo "deleted mapping survived compaction" >&2
@@ -167,54 +171,29 @@ GET_COUNTS=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
 echo "${GET_COUNTS}" | grep -q '"series:alpha":2'
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
     "${BASE}/hydd/tag_counts")" = "400" ]
+# Malformed, oversized and over-limit tag lists are rejected.
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    -H 'Content-Type: application/json' -d '{"tags":[1,2]}' \
+    "${BASE}/hydd/tag_counts")" = "400" ]
+python3 - "${WORK}/many-tags.json" <<'PY'
+import json, sys
+json.dump({"tags": [f"test:tag{i}" for i in range(1001)]}, open(sys.argv[1], "w"))
+json.dump({"tags": ["x" * 5000]}, open(sys.argv[1].replace("many-tags", "long-tag"), "w"))
+PY
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    -H 'Content-Type: application/json' --data-binary "@${WORK}/many-tags.json" \
+    "${BASE}/hydd/tag_counts")" = "400" ]
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    -H 'Content-Type: application/json' --data-binary "@${WORK}/long-tag.json" \
+    "${BASE}/hydd/tag_counts")" = "400" ]
 
 HELPER_COUNTS=$(HYD_BIN="${BIN}" HYD_CONFIG="${WORK}/hydd.conf" \
     "${ROOT}/contrib/hyd" counts "series:alpha")
 printf '%s\n' "${HELPER_COUNTS}" | grep -q 'series:alpha	2'
 
-# Reverse index: one tag -> paged hashes, with the deleted mapping applied.
-HASH_READY=0
-for _ in $(seq 1 100); do
-    if [ "$(curl -s -o /dev/null -w '%{http_code}' \
-        -H "Hydrus-Client-API-Access-Key: ${KEY}" \
-        "${BASE}/hydd/tag_hashes?tag=series:alpha")" = "200" ]; then
-        HASH_READY=1
-        break
-    fi
-    sleep 0.1
-done
-[ "${HASH_READY}" = "1" ]
-
-PAGE=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
-    "${BASE}/hydd/tag_hashes?tag=series:alpha&limit=10")
-echo "${PAGE}" | grep -q '"total":2'
-echo "${PAGE}" | grep -q "${H1}"
-echo "${PAGE}" | grep -q "${L1}"
-echo "${PAGE}" | grep -q '"next_offset":null'
-if echo "${PAGE}" | grep -q "${H2}"; then
-    echo "deleted mapping leaked into the reverse index" >&2
-    exit 1
-fi
-
-PAGE_ONE=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
-    "${BASE}/hydd/tag_hashes?tag=series:alpha&offset=0&limit=1")
-echo "${PAGE_ONE}" | grep -q "${H1}"
-echo "${PAGE_ONE}" | grep -q '"next_offset":1'
-PAGE_TWO=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
-    "${BASE}/hydd/tag_hashes?tag=series:alpha&offset=1&limit=1")
-echo "${PAGE_TWO}" | grep -q "${L1}"
-echo "${PAGE_TWO}" | grep -q '"next_offset":null'
-EMPTY_PAGE=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
-    "${BASE}/hydd/tag_hashes?tag=series:alpha&offset=2&limit=1")
-echo "${EMPTY_PAGE}" | grep -q '"hashes":\[\]'
+# Reverse search is off by default and must not be reachable.
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
-    "${BASE}/hydd/tag_hashes?tag=no:such-tag")" = "404" ]
-[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
-    "${BASE}/hydd/tag_hashes?tag=series:alpha&limit=5000")" = "400" ]
-
-HELPER_HASHES=$(HYD_BIN="${BIN}" HYD_CONFIG="${WORK}/hydd.conf" \
-    "${ROOT}/contrib/hyd" hashes "series:alpha" 0 1 2>/dev/null)
-printf '%s\n' "${HELPER_HASHES}" | grep -q "${H1}"
+    "${BASE}/hydd/tag_hashes?tag=series:alpha")" = "404" ]
 
 VERSION=$("${BIN}" --version | awk '{print $2}' | sed 's/^v//')
 [ "$("${BIN}" --version)" = "hyd v${VERSION}" ]
@@ -343,6 +322,170 @@ if STATS_OUT=$("${BIN}" -c "${WORK}/hydd.conf" --stats 2>&1); then
     exit 1
 fi
 echo "${STATS_OUT}" | grep -q 'cannot reach the API'
+
+# Derived files carry the store generation. A mismatched counts file must be
+# ignored and rebuilt in the background, never served.
+python3 - "${WORK}/data/store/counts.bin" <<'PY'
+import struct, sys
+with open(sys.argv[1], "r+b") as f:
+    f.seek(16)
+    f.write(struct.pack("<Q", 999999))
+PY
+"${BIN}" -c "${WORK}/hydd.conf" --no-sync > "${WORK}/generation-daemon.log" 2>&1 &
+DAEMON_PID=$!
+sleep 0.8
+GEN_READY=0
+for _ in $(seq 1 100); do
+    if [ "$(curl -s -o /dev/null -w '%{http_code}' \
+        -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+        "${BASE}/hydd/tag_counts?tags=series:alpha")" = "200" ]; then
+        GEN_READY=1
+        break
+    fi
+    sleep 0.1
+done
+[ "${GEN_READY}" = "1" ]
+curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    "${BASE}/hydd/tag_counts?tags=series:alpha" | grep -q '"series:alpha":2'
+if grep -q 'ignoring tag counts' "${WORK}/generation-daemon.log"; then
+    :
+else
+    echo "generation mismatch was not detected" >&2
+    exit 1
+fi
+kill "${DAEMON_PID}" 2>/dev/null || true
+wait "${DAEMON_PID}" 2>/dev/null || true
+DAEMON_PID=
+"${BIN}" -c "${WORK}/hydd.conf" --check-tag-counts | grep -q '0 mismatches'
+
+# Reverse search, explicitly enabled: build the index, page it, and check that
+# the deleted mapping is applied to the postings too.
+REVERSE_PORT=$((PORT_API + 20))
+sed -e "s/^listen_port = .*/listen_port = ${REVERSE_PORT}/" \
+    "${WORK}/hydd.conf" > "${WORK}/reverse.conf"
+printf 'tag_hashes_enabled = true\n' >> "${WORK}/reverse.conf"
+RBASE="http://127.0.0.1:${REVERSE_PORT}"
+
+"${BIN}" -c "${WORK}/reverse.conf" --rebuild-tag-counts
+[ -f "${WORK}/data/store/tag_postings.bin" ]
+[ -f "${WORK}/data/store/hash_index.bin" ]
+"${BIN}" -c "${WORK}/reverse.conf" --check-tag-counts | grep -q 'postings'
+
+"${BIN}" -c "${WORK}/reverse.conf" --no-sync > "${WORK}/reverse-daemon.log" 2>&1 &
+DAEMON_PID=$!
+sleep 0.8
+HASH_READY=0
+for _ in $(seq 1 100); do
+    if [ "$(curl -s -o /dev/null -w '%{http_code}' \
+        -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+        "${RBASE}/hydd/tag_hashes?tag=series:alpha")" = "200" ]; then
+        HASH_READY=1
+        break
+    fi
+    sleep 0.1
+done
+[ "${HASH_READY}" = "1" ]
+
+[ "$(curl -s -o /dev/null -w '%{http_code}' \
+    "${RBASE}/hydd/tag_hashes?tag=series:alpha")" = "401" ]
+
+PAGE=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    "${RBASE}/hydd/tag_hashes?tag=series:alpha&limit=10")
+echo "${PAGE}" | grep -q '"total":2'
+echo "${PAGE}" | grep -q "${H1}"
+echo "${PAGE}" | grep -q "${L1}"
+echo "${PAGE}" | grep -q '"next_offset":null'
+echo "${PAGE}" | grep -q '"next_after":null'
+if echo "${PAGE}" | grep -q "${H2}"; then
+    echo "deleted mapping leaked into the reverse index" >&2
+    exit 1
+fi
+
+PAGE_ONE=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    "${RBASE}/hydd/tag_hashes?tag=series:alpha&offset=0&limit=1")
+echo "${PAGE_ONE}" | grep -q "${H1}"
+echo "${PAGE_ONE}" | grep -q '"next_offset":1'
+echo "${PAGE_ONE}" | grep -q '"next_after":10'
+PAGE_TWO=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    "${RBASE}/hydd/tag_hashes?tag=series:alpha&offset=1&limit=1")
+echo "${PAGE_TWO}" | grep -q "${L1}"
+echo "${PAGE_TWO}" | grep -q '"next_offset":null'
+
+# Cursor paging reaches the same rows without an offset.
+AFTER_ONE=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    "${RBASE}/hydd/tag_hashes?tag=series:alpha&after=10&limit=1")
+echo "${AFTER_ONE}" | grep -q "${L1}"
+echo "${AFTER_ONE}" | grep -q '"next_after":null'
+AFTER_END=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    "${RBASE}/hydd/tag_hashes?tag=series:alpha&after=13&limit=1")
+echo "${AFTER_END}" | grep -q '"hashes":\[\]'
+
+# Offsets beyond the end are empty pages; beyond the DoS cap they are refused.
+# A cursor has no such cap.
+for boundary in 2 999; do
+    EMPTY_PAGE=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+        "${RBASE}/hydd/tag_hashes?tag=series:alpha&offset=${boundary}&limit=1")
+    echo "${EMPTY_PAGE}" | grep -q '"hashes":\[\]'
+    echo "${EMPTY_PAGE}" | grep -q '"next_offset":null'
+done
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    "${RBASE}/hydd/tag_hashes?tag=series:alpha&offset=10000001")" = "400" ]
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    "${RBASE}/hydd/tag_hashes?tag=series:alpha&offset=-1")" = "400" ]
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    "${RBASE}/hydd/tag_hashes?tag=series:alpha&offset=abc")" = "400" ]
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    "${RBASE}/hydd/tag_hashes?tag=series:alpha&offset=0&after=10")" = "400" ]
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    "${RBASE}/hydd/tag_hashes?tag=series:alpha&after=-1")" = "400" ]
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    "${RBASE}/hydd/tag_hashes?tag=series:alpha&after=abc")" = "400" ]
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    "${RBASE}/hydd/tag_hashes?tag=series:alpha&limit=0")" = "400" ]
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    "${RBASE}/hydd/tag_hashes?tag=series:alpha&limit=5000")" = "400" ]
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    "${RBASE}/hydd/tag_hashes")" = "400" ]
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    "${RBASE}/hydd/tag_hashes?tag=no:such-tag")" = "404" ]
+
+HELPER_HASHES=$(HYD_BIN="${BIN}" HYD_CONFIG="${WORK}/reverse.conf" \
+    "${ROOT}/contrib/hyd" hashes "series:alpha" 0 1 2>/dev/null)
+printf '%s\n' "${HELPER_HASHES}" | grep -q "${H1}"
+HELPER_AFTER=$(HYD_BIN="${BIN}" HYD_CONFIG="${WORK}/reverse.conf" \
+    "${ROOT}/contrib/hyd" hashes-after "series:alpha" 10 1 2>/dev/null)
+printf '%s\n' "${HELPER_AFTER}" | grep -q "${L1}"
+
+kill "${DAEMON_PID}" 2>/dev/null || true
+wait "${DAEMON_PID}" 2>/dev/null || true
+DAEMON_PID=
+
+# The reverse files are generation-checked too; corrupt the postings header
+# and let the startup repair rebuild it instead of serving stale rows.
+python3 - "${WORK}/data/store/tag_postings.bin" <<'PY'
+import struct, sys
+with open(sys.argv[1], "r+b") as f:
+    f.seek(16)
+    f.write(struct.pack("<Q", 999999))
+PY
+"${BIN}" -c "${WORK}/reverse.conf" --no-sync > "${WORK}/reverse-repair.log" 2>&1 &
+DAEMON_PID=$!
+sleep 0.8
+REPAIR_READY=0
+for _ in $(seq 1 100); do
+    if [ "$(curl -s -o /dev/null -w '%{http_code}' \
+        -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+        "${RBASE}/hydd/tag_hashes?tag=series:alpha")" = "200" ]; then
+        REPAIR_READY=1
+        break
+    fi
+    sleep 0.1
+done
+[ "${REPAIR_READY}" = "1" ]
+kill "${DAEMON_PID}" 2>/dev/null || true
+wait "${DAEMON_PID}" 2>/dev/null || true
+DAEMON_PID=
+"${BIN}" -c "${WORK}/reverse.conf" --check-tag-counts | grep -q '0 mismatches'
 
 # The relay is disabled without keep_update_cache, even when the cache exists.
 NORELAY_PORT=$((PORT_API + 10))

@@ -6,6 +6,7 @@
 #   hyd stats|scan|repair|verify|version
 #   hyd counts TAG...                  mapping count per tag from the running API
 #   hyd hashes TAG [OFFSET] [LIMIT]    paged SHA-256 list for one tag (reverse index)
+#   hyd hashes-after TAG ID [LIMIT]    continue after a next_after hash id
 #   hyd rebuild-counts                 rebuild counts.bin and tag_lookup.bin
 #   hyd check                          verify the store and the derived counts
 #
@@ -23,6 +24,7 @@ usage: hyd [--sha256|--sha1|--md5] FILE|HASH
        hyd stats
        hyd counts TAG...
        hyd hashes TAG [OFFSET] [LIMIT]
+       hyd hashes-after TAG ID [LIMIT]
        hyd rebuild-counts
        hyd check
        hyd scan
@@ -207,6 +209,22 @@ cmd_hashes()
         --hash-offset "$offset" --hash-limit "$limit"
 }
 
+cmd_hashes_after()
+{
+    require_bin
+    [ "$#" -gt 0 ] || fail "no tag given"
+    tag=$1
+    shift
+    [ "$#" -gt 0 ] || fail "no hash id given"
+    after=$1
+    shift
+    limit=${1:-100}
+    [ "$#" -eq 0 ] || shift
+    [ "$#" -eq 0 ] || fail "usage: hyd hashes-after TAG ID [LIMIT]"
+    "$HYD_BIN" -c "$HYD_CONFIG" --tag-hashes "$tag" \
+        --hash-after "$after" --hash-limit "$limit"
+}
+
 cmd_check()
 {
     require_bin
@@ -271,6 +289,11 @@ case "$1" in
     hashes)
         shift
         cmd_hashes "$@"
+        exit $?
+        ;;
+    hashes-after)
+        shift
+        cmd_hashes_after "$@"
         exit $?
         ;;
     rebuild-counts)

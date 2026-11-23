@@ -1083,6 +1083,8 @@ ApiResponse ApiHandlers::handle_tag_hashes(const ApiRequest& request, const nloh
 
     std::int64_t offset = 0;
     std::int64_t limit = 100;
+    std::int64_t after_value = 0;
+    bool has_after = false;
     try
     {
         if (json_param_i64(params, "offset", offset) && offset < 0)
@@ -1096,20 +1098,35 @@ ApiResponse ApiHandlers::handle_tag_hashes(const ApiRequest& request, const nloh
                 return text_response(400, "limit must be between 1 and 1000.");
             }
         }
+        has_after = json_param_i64(params, "after", after_value);
     }
     catch (const std::exception& exception)
     {
         return text_response(400, exception.what());
     }
 
-    if (offset > 10000000)
+    if (has_after && params.contains("offset"))
+    {
+        return text_response(400, "use either offset or after, not both.");
+    }
+    if (has_after && (after_value < 0 || after_value > 0xFFFFFFFFll))
+    {
+        return text_response(400, "after must be a hash id between 0 and 4294967295.");
+    }
+    if (!has_after && offset > 10000000)
     {
         return text_response(400,
-            "offset is too large for a single page; narrow the query or start from 0.");
+            "offset is too large for a single page; use the next_after cursor instead.");
+    }
+
+    std::optional<std::uint32_t> after;
+    if (has_after)
+    {
+        after = static_cast<std::uint32_t>(after_value);
     }
 
     const auto page = store->tag_hashes(*tag, static_cast<std::uint64_t>(offset),
-        static_cast<std::uint32_t>(limit));
+        static_cast<std::uint32_t>(limit), after);
     if (!page)
     {
         return text_response(404, "that tag is not defined in this mirror.");
@@ -1128,6 +1145,9 @@ ApiResponse ApiHandlers::handle_tag_hashes(const ApiRequest& request, const nloh
     body["total"] = page->total;
     body["hashes"] = std::move(hashes);
     body["next_offset"] = page->has_more ? nlohmann::json(page->next_offset) : nlohmann::json(nullptr);
+    body["next_after"] = page->next_after
+        ? nlohmann::json(*page->next_after)
+        : nlohmann::json(nullptr);
 
     return ApiResponse { 200, "application/json", dump_json(body) };
 }

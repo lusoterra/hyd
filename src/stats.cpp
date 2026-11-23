@@ -909,7 +909,7 @@ int run_tag_counts(const Config& config, const std::vector<std::string>& tags)
 }
 
 int run_tag_hashes(const Config& config, std::string_view tag,
-    std::int64_t offset, std::int64_t limit)
+    std::int64_t offset, std::int64_t limit, std::optional<std::int64_t> after)
 {
     if (tag.empty())
     {
@@ -921,12 +921,24 @@ int run_tag_hashes(const Config& config, std::string_view tag,
         std::cerr << "hydd: invalid offset or limit\n";
         return 2;
     }
+    if (after && (*after < 0 || *after > 0xFFFFFFFFll))
+    {
+        std::cerr << "hydd: invalid --hash-after\n";
+        return 2;
+    }
 
     const std::string api_url = local_api_url(config);
     const auto keys = local_api_keys(config);
-    const std::string path = "/hydd/tag_hashes?tag=" + percent_encode(tag)
-        + "&offset=" + std::to_string(offset)
+    std::string path = "/hydd/tag_hashes?tag=" + percent_encode(tag)
         + "&limit=" + std::to_string(limit);
+    if (after)
+    {
+        path += "&after=" + std::to_string(*after);
+    }
+    else
+    {
+        path += "&offset=" + std::to_string(offset);
+    }
 
     HttpResponse response;
     std::string last_error;
@@ -986,7 +998,12 @@ int run_tag_hashes(const Config& config, std::string_view tag,
             }
 
             const auto total = document.value("total", std::uint64_t { 0 });
-            if (document.contains("next_offset") && document.at("next_offset").is_number())
+            if (document.contains("next_after") && document.at("next_after").is_number())
+            {
+                std::cerr << "total " << total << ", next after "
+                          << document.at("next_after").get<std::uint64_t>() << "\n";
+            }
+            else if (document.contains("next_offset") && document.at("next_offset").is_number())
             {
                 std::cerr << "total " << total << ", next offset "
                           << document.at("next_offset").get<std::uint64_t>() << "\n";

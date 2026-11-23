@@ -69,6 +69,7 @@ struct Options
     std::optional<std::string> tag_hashes_tag;
     std::int64_t tag_hashes_offset = 0;
     std::int64_t tag_hashes_limit = 100;
+    std::optional<std::int64_t> tag_hashes_after;
     bool print_access_key = false;
     std::string query_hash;
 };
@@ -99,6 +100,7 @@ void print_help()
         "      --tag-counts TAG       Query the running API for mapping counts (repeatable)\n"
         "      --tag-hashes TAG       Query the running API for the hashes of one tag\n"
         "      --hash-offset N        Page offset for --tag-hashes (default 0)\n"
+        "      --hash-after ID        Continue after a hash id returned as next_after\n"
         "      --hash-limit N         Page size for --tag-hashes (1-1000, default 100)\n"
         "      --print-access-key     Print every configured API access key and exit\n"
         "      --log-level LEVEL      trace, debug, info, warn, error, off\n"
@@ -134,6 +136,7 @@ std::optional<Options> parse_options(int argc, char** argv, std::string& error)
         { "tag-counts", required_argument, nullptr, 1013 },
         { "tag-hashes", required_argument, nullptr, 1014 },
         { "hash-offset", required_argument, nullptr, 1015 },
+        { "hash-after", required_argument, nullptr, 1017 },
         { "hash-limit", required_argument, nullptr, 1016 },
         { "help", no_argument, nullptr, 'h' },
         { "version", no_argument, nullptr, 'V' },
@@ -238,6 +241,17 @@ std::optional<Options> parse_options(int argc, char** argv, std::string& error)
                     return std::nullopt;
                 }
                 options.tag_hashes_limit = *value;
+                break;
+            }
+            case 1017:
+            {
+                const auto value = hyd::parse_i64(optarg);
+                if (!value || *value < 0 || *value > 0xFFFFFFFFll)
+                {
+                    error = "invalid --hash-after (expects a 32-bit hash id)";
+                    return std::nullopt;
+                }
+                options.tag_hashes_after = *value;
                 break;
             }
             case 'h':
@@ -627,7 +641,8 @@ int main(int argc, char** argv)
     if (options->tag_hashes_tag)
     {
         return hyd::run_tag_hashes(runtime.config, *options->tag_hashes_tag,
-            options->tag_hashes_offset, options->tag_hashes_limit);
+            options->tag_hashes_offset, options->tag_hashes_limit,
+            options->tag_hashes_after);
     }
 
     hyd::log_set_level(hyd::log_level_from_string(runtime.config.get_string("log_level", "info")));

@@ -25,6 +25,7 @@ struct TagHashesPage
     std::uint64_t offset = 0;
     bool has_more = false;
     std::uint64_t next_offset = 0;
+    std::optional<std::uint32_t> next_after;
     std::vector<std::string> hashes;
 };
 
@@ -66,11 +67,13 @@ public:
     // index is roughly one u32 per mapping plus a hash-id map.
     virtual bool has_tag_hashes() const { return false; }
     virtual std::optional<TagHashesPage> tag_hashes(std::string_view tag,
-        std::uint64_t offset, std::uint32_t limit) const
+        std::uint64_t offset, std::uint32_t limit,
+        std::optional<std::uint32_t> after = std::nullopt) const
     {
         (void)tag;
         (void)offset;
         (void)limit;
+        (void)after;
         return std::nullopt;
     }
 };

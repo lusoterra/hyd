@@ -962,7 +962,7 @@ bool Store::has_tag_hashes() const
 }
 
 std::optional<TagHashesPage> Store::tag_hashes(std::string_view tag,
-    std::uint64_t offset, std::uint32_t limit) const
+    std::uint64_t offset, std::uint32_t limit, std::optional<std::uint32_t> after) const
 {
     if (!has_tag_hashes())
     {
@@ -1057,8 +1057,33 @@ std::optional<TagHashesPage> Store::tag_hashes(std::string_view tag,
 
     std::size_t base_index = static_cast<std::size_t>(begin);
     std::size_t add_index = 0;
+
+    if (after)
+    {
+        // Base postings are sorted by hash id, so a cursor page starts at the
+        // first larger id instead of walking from the beginning.
+        std::size_t low = static_cast<std::size_t>(begin);
+        std::size_t high = static_cast<std::size_t>(end);
+        while (low < high)
+        {
+            const std::size_t middle = low + (high - low) / 2;
+            if (read_u32(impl_->postings_ids + middle * 4) <= *after)
+            {
+                low = middle + 1;
+            }
+            else
+            {
+                high = middle;
+            }
+        }
+        base_index = low;
+        add_index = static_cast<std::size_t>(
+            std::upper_bound(added.begin(), added.end(), *after) - added.begin());
+    }
+
     std::uint64_t seen = 0;
     bool has_more = false;
+    std::optional<std::uint32_t> last_value;
 
     auto next_base = [&]() -> std::optional<std::uint32_t> {
         while (base_index < end)
@@ -1122,6 +1147,7 @@ std::optional<TagHashesPage> Store::tag_hashes(std::string_view tag,
             return std::nullopt;
         }
         page.push_back(*hash);
+        last_value = value;
         ++seen;
     }
 
@@ -1130,6 +1156,10 @@ std::optional<TagHashesPage> Store::tag_hashes(std::string_view tag,
     result.offset = offset;
     result.has_more = has_more;
     result.next_offset = offset + page.size();
+    if (has_more && last_value)
+    {
+        result.next_after = *last_value;
+    }
     result.hashes = std::move(page);
     return result;
 }

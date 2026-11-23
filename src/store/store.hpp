@@ -69,7 +69,8 @@ public:
 
     bool has_tag_hashes() const override;
     std::optional<TagHashesPage> tag_hashes(std::string_view tag,
-        std::uint64_t offset, std::uint32_t limit) const override;
+        std::uint64_t offset, std::uint32_t limit,
+        std::optional<std::uint32_t> after = std::nullopt) const override;
 
     std::optional<std::string> tag_string(std::uint32_t tag_id) const;
 
