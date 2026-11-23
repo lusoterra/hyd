@@ -9,3 +9,5 @@ compile_commands.json
 .idea/
 __pycache__/
 *.pyc
+/hyd-*.tar.gz
+/hyd-*.tar.gz.asc
