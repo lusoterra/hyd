@@ -666,7 +666,7 @@ ApiResponse ApiHandlers::route(const ApiRequest& request)
         return ApiResponse { 200, "application/json", dump_json(body) };
     }
 
-    if (path == "/hyd/health")
+    if (path == "/health")
     {
         return ApiResponse { 200, "application/json", dump_json(health_json()) };
     }
@@ -681,10 +681,10 @@ ApiResponse ApiHandlers::route(const ApiRequest& request)
         return ApiResponse { 200, "application/json", dump_json(health_json()) };
     }
 
-    if (path == "/health" || path == "/stats")
+    if (path == "/stats")
     {
         return text_response(404,
-            "hydd extensions moved under /hyd/ in 0.8.0: use /hyd/health or /hyd/stats.");
+            "hydd extension moved under /hyd/ in 0.8.0: use /hyd/stats.");
     }
 
     if (path == "/metadata")

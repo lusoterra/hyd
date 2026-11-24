@@ -148,12 +148,12 @@ echo "${STATS}" | grep -q 'SHA-256'
 echo "${STATS}" | grep -q 'Mappings'
 echo "${STATS}" | grep -q 'ready'
 [ ! -e "${WORK}/stats-no-data" ]
-# /hyd/stats requires authorization (/hyd/health stays open);
+# /hyd/stats requires authorization (/health stays open);
 # loopback trust is disabled by require_localhost_key=true here, so send a key.
 [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT_API}/hyd/stats")" = "401" ]
 curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" "http://127.0.0.1:${PORT_API}/hyd/stats" | grep -q '"built":true'
 curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" "http://127.0.0.1:${PORT_API}/hyd/stats" | grep -q '"phase":"idle"'
-curl -s "http://127.0.0.1:${PORT_API}/hyd/health" | grep -q '"built":true'
+curl -s "http://127.0.0.1:${PORT_API}/health" | grep -q '"built":true'
 # Feature status is in the stats payload and the human stats page.
 wait_counts_delta "${BASE}" "${KEY}"
 curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
@@ -170,9 +170,10 @@ STATS_TEXT=$("${BIN}" -c "${WORK}/hydd.conf" --stats)
 printf '%s\n' "${STATS_TEXT}" | grep -q 'Tag counts'
 printf '%s\n' "${STATS_TEXT}" | grep -q 'Reverse lookup'
 printf '%s\n' "${STATS_TEXT}" | grep -q 'Seeding'
-# The pre-0.8 top-level extension paths are gone.
+# The old top-level /stats extension path is gone; /health stays for Hydrus.
 [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT_API}/stats")" = "404" ]
-[ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT_API}/health")" = "404" ]
+curl -s "http://127.0.0.1:${PORT_API}/health" | grep -q '"built":true'
+[ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT_API}/hyd/health")" = "404" ]
 # Root serves a small HTML page; unknown endpoints answer JSON, not plain text.
 ROOT_HTML=$(curl -s "http://127.0.0.1:${PORT_API}/")
 printf '%s\n' "${ROOT_HTML}" | grep -q '<h1>hyd</h1>'
@@ -352,7 +353,7 @@ BODY=$(curl -s -X POST -H 'Content-Type: application/json' \
 echo "${BODY}" | grep -q "${L2}"
 echo "${BODY}" | grep -q 'creator:gamma'
 
-curl -s "${BASE}/hyd/health" | grep -q '"built":true'
+curl -s "${BASE}/health" | grep -q '"built":true'
 
 kill "${DAEMON_PID}" 2>/dev/null || true
 wait "${DAEMON_PID}" 2>/dev/null || true
@@ -836,9 +837,9 @@ sleep 1
 [ "$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/hyd/tag_hashes?tag=series:alpha")" = "404" ]
 
 for _ in 1 2 3; do
-    [ "$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/hyd/health")" = "200" ]
+    [ "$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/health")" = "200" ]
 done
-LIMITED=$(curl -s -D "${WORK}/rate-headers" -o /dev/null -w '%{http_code}' "${BASE}/hyd/health")
+LIMITED=$(curl -s -D "${WORK}/rate-headers" -o /dev/null -w '%{http_code}' "${BASE}/health")
 [ "${LIMITED}" = "429" ]
 grep -qi '^retry-after:' "${WORK}/rate-headers"
 

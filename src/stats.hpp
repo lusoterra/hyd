@@ -11,7 +11,7 @@
 
 namespace hyd {
 
-// Renders the /hyd/health payload (and optionally /api_version) as a human-readable
+// Renders the /health payload (and optionally /api_version) as a human-readable
 // statistics page. Unknown or missing fields are skipped so this works against
 // older daemons.
 std::string render_stats(const nlohmann::json& health, const nlohmann::json* api_version,
