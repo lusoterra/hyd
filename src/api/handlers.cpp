@@ -662,12 +662,12 @@ ApiResponse ApiHandlers::route(const ApiRequest& request)
         return ApiResponse { 200, "application/json", dump_json(body) };
     }
 
-    if (path == "/hydd/health")
+    if (path == "/hyd/health")
     {
         return ApiResponse { 200, "application/json", dump_json(health_json()) };
     }
 
-    if (path == "/hydd/stats")
+    if (path == "/hyd/stats")
     {
         ApiResponse failure;
         if (!authorize(request, nlohmann::json::object(), failure))
@@ -680,7 +680,7 @@ ApiResponse ApiHandlers::route(const ApiRequest& request)
     if (path == "/health" || path == "/stats")
     {
         return text_response(404,
-            "hydd extensions moved under /hydd/ in 0.8.0: use /hydd/health or /hydd/stats.");
+            "hydd extensions moved under /hyd/ in 0.8.0: use /hyd/health or /hyd/stats.");
     }
 
     if (path == "/metadata")
@@ -763,7 +763,7 @@ ApiResponse ApiHandlers::route(const ApiRequest& request)
         return handle_file_metadata(request, params);
     }
 
-    if (path == "/hydd/tag_counts")
+    if (path == "/hyd/tag_counts")
     {
         ApiResponse failure;
         if (!authorize(request, params, failure))
@@ -773,7 +773,7 @@ ApiResponse ApiHandlers::route(const ApiRequest& request)
         return handle_tag_counts(request, params);
     }
 
-    if (path == "/hydd/tag_hashes")
+    if (path == "/hyd/tag_hashes")
     {
         ApiResponse failure;
         if (!authorize(request, params, failure))

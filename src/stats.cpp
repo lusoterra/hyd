@@ -629,16 +629,12 @@ int run_stats(const Config& config)
 
         HttpResponse response;
         std::string error;
-        bool ok = get_with_keys("/hydd/stats", response, error);
+        bool ok = get_with_keys("/hyd/stats", response, error);
         if (!ok && error.rfind("HTTP 404", 0) == 0)
         {
-            // Pre-0.8 daemons kept the extensions at the top level and only
-            // had /health; try both spellings so `hyd --stats` keeps working.
+            // Pre-0.8 daemons kept the extensions at the top level; try the
+            // old spellings so `hyd --stats` keeps working.
             ok = get_with_keys("/stats", response, error);
-        }
-        if (!ok && error.rfind("HTTP 404", 0) == 0)
-        {
-            ok = get_with_keys("/hydd/health", response, error);
         }
         if (!ok && error.rfind("HTTP 404", 0) == 0)
         {
@@ -887,7 +883,7 @@ int run_tag_counts(const Config& config, const std::vector<std::string>& tags)
 
     const std::string api_url = local_api_url(config);
     const auto keys = local_api_keys(config);
-    const std::string path = "/hydd/tag_counts?tags=" + percent_encode(requested.dump());
+    const std::string path = "/hyd/tag_counts?tags=" + percent_encode(requested.dump());
 
     HttpClient::global_init();
 
@@ -992,7 +988,7 @@ int run_tag_hashes(const Config& config, const std::vector<std::string>& tags,
 
     const std::string api_url = local_api_url(config);
     const auto keys = local_api_keys(config);
-    std::string path = "/hydd/tag_hashes?tags=" + percent_encode(requested.dump())
+    std::string path = "/hyd/tag_hashes?tags=" + percent_encode(requested.dump())
         + "&limit=" + std::to_string(limit);
     if (after)
     {

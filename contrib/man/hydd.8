@@ -165,14 +165,14 @@ GET  /get_services
 GET  /get_service
 GET  /get_files/file_metadata
 GET  /get_files/file_hashes
-GET  /health              (hydd extension)
-GET  /stats               (hydd extension: /health superset)
+GET  /hyd/health          (hydd extension)
+GET  /hyd/stats           (hydd extension: /hyd/health superset)
 GET  /metadata            (repository relay, keep_update_cache)
 GET  /update              (repository relay, keep_update_cache)
 .fi
 .PP
 Every endpoint except
-.IR / ", " /api_version ", " /health
+.IR / ", " /api_version ", " /hyd/health
 requires the
 .B Hydrus-Client-API-Access-Key
 header, the
@@ -189,9 +189,9 @@ work with no flags. Set
 to require a valid key from localhost as well; the local helpers then try
 .B HYDD_API_KEY
 and the configured keys automatically.
-.B /health
+.B /hyd/health
 stays unauthenticated for Hydrus parity;
-.B /stats
+.B /hyd/stats
 (the richer hydd superset) requires authorization.
 At most 32 live sessions are minted per configured access key.
 .PP

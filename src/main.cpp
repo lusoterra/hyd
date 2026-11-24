@@ -522,7 +522,7 @@ bool reload_store(Runtime& runtime, std::string& error)
 
 // Builds counts.bin/tag_lookup.bin when they are missing (upgrade from 0.7.x)
 // or when force is set. Runs off the API thread so startup stays immediate;
-// /hydd/tag_counts answers 503 until this finishes.
+// /hyd/tag_counts answers 503 until this finishes.
 void build_tag_metadata_if_needed(Runtime& runtime, bool force)
 {
     if (!runtime.config.get_bool("tag_counts_enabled", true))

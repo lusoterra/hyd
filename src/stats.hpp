@@ -11,7 +11,7 @@
 
 namespace hyd {
 
-// Renders the /health payload (and optionally /api_version) as a human-readable
+// Renders the /hyd/health payload (and optionally /api_version) as a human-readable
 // statistics page. Unknown or missing fields are skipped so this works against
 // older daemons.
 std::string render_stats(const nlohmann::json& health, const nlohmann::json* api_version,
@@ -25,11 +25,11 @@ int run_stats(const Config& config);
 // shape as --query. Accepts SHA-256, SHA-1, or MD5. Returns a process exit code.
 int run_api_query(const Config& config, std::string_view hash);
 
-// Queries /hydd/tag_counts on the local API and prints one "tag<TAB>count"
+// Queries /hyd/tag_counts on the local API and prints one "tag<TAB>count"
 // line per requested tag ("unknown" when the repository has never defined it).
 int run_tag_counts(const Config& config, const std::vector<std::string>& tags);
 
-// Queries /hydd/tag_hashes and prints one hash per line. Offset/limit select a
+// Queries /hyd/tag_hashes and prints one hash per line. Offset/limit select a
 // page; progress (total/next) goes to stderr so stdout stays pipeable.
 int run_tag_hashes(const Config& config, const std::vector<std::string>& tags,
     std::int64_t offset, std::int64_t limit,

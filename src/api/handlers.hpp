@@ -78,8 +78,8 @@ private:
         bool identifiers_only, bool basic_only, bool include_notes, bool detailed_urls) const;
 
     nlohmann::json base_response() const;
-    // Shared /health and /stats payload. /health stays unauthenticated for
-    // Hydrus parity; /stats requires authorization (loopback still passes by
+    // Shared /hyd/health and /hyd/stats payload. /hyd/health stays unauthenticated for
+    // Hydrus parity; /hyd/stats requires authorization (loopback still passes by
     // default, so local `hyd --stats` keeps working).
     nlohmann::json health_json() const;
 

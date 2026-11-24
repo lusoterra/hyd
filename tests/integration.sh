@@ -30,7 +30,7 @@ wait_counts_delta() {
     key=$2
     tries=0
     while [ "${tries}" -lt 100 ]; do
-        if curl -s -H "Hydrus-Client-API-Access-Key: ${key}" "${base}/hydd/stats" \
+        if curl -s -H "Hydrus-Client-API-Access-Key: ${key}" "${base}/hyd/stats" \
             | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin)["features"]["tag_counts"]["delta_applied"] else 1)' 2>/dev/null; then
             return 0
         fi
@@ -148,16 +148,16 @@ echo "${STATS}" | grep -q 'SHA-256'
 echo "${STATS}" | grep -q 'Mappings'
 echo "${STATS}" | grep -q 'ready'
 [ ! -e "${WORK}/stats-no-data" ]
-# /hydd/stats requires authorization (/hydd/health stays open);
+# /hyd/stats requires authorization (/hyd/health stays open);
 # loopback trust is disabled by require_localhost_key=true here, so send a key.
-[ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT_API}/hydd/stats")" = "401" ]
-curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" "http://127.0.0.1:${PORT_API}/hydd/stats" | grep -q '"built":true'
-curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" "http://127.0.0.1:${PORT_API}/hydd/stats" | grep -q '"phase":"idle"'
-curl -s "http://127.0.0.1:${PORT_API}/hydd/health" | grep -q '"built":true'
+[ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT_API}/hyd/stats")" = "401" ]
+curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" "http://127.0.0.1:${PORT_API}/hyd/stats" | grep -q '"built":true'
+curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" "http://127.0.0.1:${PORT_API}/hyd/stats" | grep -q '"phase":"idle"'
+curl -s "http://127.0.0.1:${PORT_API}/hyd/health" | grep -q '"built":true'
 # Feature status is in the stats payload and the human stats page.
 wait_counts_delta "${BASE}" "${KEY}"
 curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
-    "http://127.0.0.1:${PORT_API}/hydd/stats" > "${WORK}/stats.json"
+    "http://127.0.0.1:${PORT_API}/hyd/stats" > "${WORK}/stats.json"
 python3 - "${WORK}/stats.json" <<'PY'
 import json, sys
 f = json.load(open(sys.argv[1]))["features"]
@@ -177,12 +177,12 @@ printf '%s\n' "${STATS_TEXT}" | grep -q 'Seeding'
 # Derived tag counts: base counts plus the pending delta overlay. A store that
 # was missing the derived files builds them in the background after startup, so
 # wait for the first 200 before asserting values.
-[ "$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/hydd/tag_counts?tags=series:alpha")" = "401" ]
+[ "$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/hyd/tag_counts?tags=series:alpha")" = "401" ]
 COUNT_READY=0
 for _ in $(seq 1 100); do
     if [ "$(curl -s -o /dev/null -w '%{http_code}' \
         -H "Hydrus-Client-API-Access-Key: ${KEY}" \
-        "${BASE}/hydd/tag_counts?tags=series:alpha")" = "200" ]; then
+        "${BASE}/hyd/tag_counts?tags=series:alpha")" = "200" ]; then
         COUNT_READY=1
         break
     fi
@@ -193,21 +193,21 @@ wait_counts_delta "${BASE}" "${KEY}"
 COUNTS=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
     -H 'Content-Type: application/json' \
     -d '{"tags":["series:alpha","creator:gamma","character:beta","character:delta","no:such-tag"]}' \
-    "${BASE}/hydd/tag_counts")
+    "${BASE}/hyd/tag_counts")
 echo "${COUNTS}" | grep -q '"series:alpha":2'
 echo "${COUNTS}" | grep -q '"creator:gamma":3'
 echo "${COUNTS}" | grep -q '"character:beta":1'
 echo "${COUNTS}" | grep -q '"character:delta":1'
 echo "${COUNTS}" | grep -q '"unknown":\["no:such-tag"\]'
 GET_COUNTS=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
-    "${BASE}/hydd/tag_counts?tags=series:alpha")
+    "${BASE}/hyd/tag_counts?tags=series:alpha")
 echo "${GET_COUNTS}" | grep -q '"series:alpha":2'
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
-    "${BASE}/hydd/tag_counts")" = "400" ]
+    "${BASE}/hyd/tag_counts")" = "400" ]
 # Malformed, oversized and over-limit tag lists are rejected.
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
     -H 'Content-Type: application/json' -d '{"tags":[1,2]}' \
-    "${BASE}/hydd/tag_counts")" = "400" ]
+    "${BASE}/hyd/tag_counts")" = "400" ]
 python3 - "${WORK}/many-tags.json" <<'PY'
 import json, sys
 json.dump({"tags": [f"test:tag{i}" for i in range(1001)]}, open(sys.argv[1], "w"))
@@ -215,10 +215,10 @@ json.dump({"tags": ["x" * 5000]}, open(sys.argv[1].replace("many-tags", "long-ta
 PY
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
     -H 'Content-Type: application/json' --data-binary "@${WORK}/many-tags.json" \
-    "${BASE}/hydd/tag_counts")" = "400" ]
+    "${BASE}/hyd/tag_counts")" = "400" ]
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
     -H 'Content-Type: application/json' --data-binary "@${WORK}/long-tag.json" \
-    "${BASE}/hydd/tag_counts")" = "400" ]
+    "${BASE}/hyd/tag_counts")" = "400" ]
 
 HELPER_COUNTS=$(HYD_BIN="${BIN}" HYD_CONFIG="${WORK}/hydd.conf" \
     "${ROOT}/contrib/hyd" counts "series:alpha")
@@ -226,7 +226,7 @@ printf '%s\n' "${HELPER_COUNTS}" | grep -q 'series:alpha	2'
 
 # Reverse search is off by default and must not be reachable.
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
-    "${BASE}/hydd/tag_hashes?tag=series:alpha")" = "404" ]
+    "${BASE}/hyd/tag_hashes?tag=series:alpha")" = "404" ]
 
 VERSION=$("${BIN}" --version | awk '{print $2}' | sed 's/^v//')
 [ "$("${BIN}" --version)" = "hyd v${VERSION}" ]
@@ -343,7 +343,7 @@ BODY=$(curl -s -X POST -H 'Content-Type: application/json' \
 echo "${BODY}" | grep -q "${L2}"
 echo "${BODY}" | grep -q 'creator:gamma'
 
-curl -s "${BASE}/hydd/health" | grep -q '"built":true'
+curl -s "${BASE}/hyd/health" | grep -q '"built":true'
 
 kill "${DAEMON_PID}" 2>/dev/null || true
 wait "${DAEMON_PID}" 2>/dev/null || true
@@ -371,7 +371,7 @@ GEN_READY=0
 for _ in $(seq 1 100); do
     if [ "$(curl -s -o /dev/null -w '%{http_code}' \
         -H "Hydrus-Client-API-Access-Key: ${KEY}" \
-        "${BASE}/hydd/tag_counts?tags=series:alpha")" = "200" ]; then
+        "${BASE}/hyd/tag_counts?tags=series:alpha")" = "200" ]; then
         GEN_READY=1
         break
     fi
@@ -380,7 +380,7 @@ done
 [ "${GEN_READY}" = "1" ]
 wait_counts_delta "${BASE}" "${KEY}"
 curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
-    "${BASE}/hydd/tag_counts?tags=series:alpha" | grep -q '"series:alpha":2'
+    "${BASE}/hyd/tag_counts?tags=series:alpha" | grep -q '"series:alpha":2'
 if grep -q 'ignoring tag counts' "${WORK}/generation-daemon.log"; then
     :
 else
@@ -412,7 +412,7 @@ HASH_READY=0
 for _ in $(seq 1 100); do
     if [ "$(curl -s -o /dev/null -w '%{http_code}' \
         -H "Hydrus-Client-API-Access-Key: ${KEY}" \
-        "${RBASE}/hydd/tag_hashes?tag=series:alpha")" = "200" ]; then
+        "${RBASE}/hyd/tag_hashes?tag=series:alpha")" = "200" ]; then
         HASH_READY=1
         break
     fi
@@ -423,7 +423,7 @@ wait_counts_delta "${RBASE}" "${KEY}"
 
 # The stats features report the enabled reverse index as ready.
 curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
-    "${RBASE}/hydd/stats" > "${WORK}/reverse-stats.json"
+    "${RBASE}/hyd/stats" > "${WORK}/reverse-stats.json"
 python3 - "${WORK}/reverse-stats.json" <<'PY'
 import json, sys
 f = json.load(open(sys.argv[1]))["features"]
@@ -432,10 +432,10 @@ assert f["tag_hashes"]["bytes"] > 0 and f["tag_hashes"]["as_of"] > 0
 assert f["tag_counts"]["ready"] is True
 PY
 [ "$(curl -s -o /dev/null -w '%{http_code}' \
-    "${RBASE}/hydd/tag_hashes?tag=series:alpha")" = "401" ]
+    "${RBASE}/hyd/tag_hashes?tag=series:alpha")" = "401" ]
 
 PAGE=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
-    "${RBASE}/hydd/tag_hashes?tag=series:alpha&limit=10")
+    "${RBASE}/hyd/tag_hashes?tag=series:alpha&limit=10")
 echo "${PAGE}" | grep -q '"total":2'
 echo "${PAGE}" | grep -q "${H1}"
 echo "${PAGE}" | grep -q "${L1}"
@@ -447,52 +447,52 @@ if echo "${PAGE}" | grep -q "${H2}"; then
 fi
 
 PAGE_ONE=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
-    "${RBASE}/hydd/tag_hashes?tag=series:alpha&offset=0&limit=1")
+    "${RBASE}/hyd/tag_hashes?tag=series:alpha&offset=0&limit=1")
 echo "${PAGE_ONE}" | grep -q "${H1}"
 echo "${PAGE_ONE}" | grep -q '"next_offset":1'
 echo "${PAGE_ONE}" | grep -q '"next_after":10'
 PAGE_TWO=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
-    "${RBASE}/hydd/tag_hashes?tag=series:alpha&offset=1&limit=1")
+    "${RBASE}/hyd/tag_hashes?tag=series:alpha&offset=1&limit=1")
 echo "${PAGE_TWO}" | grep -q "${L1}"
 echo "${PAGE_TWO}" | grep -q '"next_offset":null'
 
 # Cursor paging reaches the same rows without an offset.
 AFTER_ONE=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
-    "${RBASE}/hydd/tag_hashes?tag=series:alpha&after=10&limit=1")
+    "${RBASE}/hyd/tag_hashes?tag=series:alpha&after=10&limit=1")
 echo "${AFTER_ONE}" | grep -q "${L1}"
 echo "${AFTER_ONE}" | grep -q '"next_after":null'
 AFTER_END=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
-    "${RBASE}/hydd/tag_hashes?tag=series:alpha&after=13&limit=1")
+    "${RBASE}/hyd/tag_hashes?tag=series:alpha&after=13&limit=1")
 echo "${AFTER_END}" | grep -q '"hashes":\[\]'
 
 # Offsets beyond the end are empty pages; beyond the DoS cap they are refused.
 # A cursor has no such cap.
 for boundary in 2 999; do
     EMPTY_PAGE=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
-        "${RBASE}/hydd/tag_hashes?tag=series:alpha&offset=${boundary}&limit=1")
+        "${RBASE}/hyd/tag_hashes?tag=series:alpha&offset=${boundary}&limit=1")
     echo "${EMPTY_PAGE}" | grep -q '"hashes":\[\]'
     echo "${EMPTY_PAGE}" | grep -q '"next_offset":null'
 done
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
-    "${RBASE}/hydd/tag_hashes?tag=series:alpha&offset=10000001")" = "400" ]
+    "${RBASE}/hyd/tag_hashes?tag=series:alpha&offset=10000001")" = "400" ]
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
-    "${RBASE}/hydd/tag_hashes?tag=series:alpha&offset=-1")" = "400" ]
+    "${RBASE}/hyd/tag_hashes?tag=series:alpha&offset=-1")" = "400" ]
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
-    "${RBASE}/hydd/tag_hashes?tag=series:alpha&offset=abc")" = "400" ]
+    "${RBASE}/hyd/tag_hashes?tag=series:alpha&offset=abc")" = "400" ]
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
-    "${RBASE}/hydd/tag_hashes?tag=series:alpha&offset=0&after=10")" = "400" ]
+    "${RBASE}/hyd/tag_hashes?tag=series:alpha&offset=0&after=10")" = "400" ]
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
-    "${RBASE}/hydd/tag_hashes?tag=series:alpha&after=-1")" = "400" ]
+    "${RBASE}/hyd/tag_hashes?tag=series:alpha&after=-1")" = "400" ]
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
-    "${RBASE}/hydd/tag_hashes?tag=series:alpha&after=abc")" = "400" ]
+    "${RBASE}/hyd/tag_hashes?tag=series:alpha&after=abc")" = "400" ]
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
-    "${RBASE}/hydd/tag_hashes?tag=series:alpha&limit=0")" = "400" ]
+    "${RBASE}/hyd/tag_hashes?tag=series:alpha&limit=0")" = "400" ]
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
-    "${RBASE}/hydd/tag_hashes?tag=series:alpha&limit=5000")" = "400" ]
+    "${RBASE}/hyd/tag_hashes?tag=series:alpha&limit=5000")" = "400" ]
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
-    "${RBASE}/hydd/tag_hashes")" = "400" ]
+    "${RBASE}/hyd/tag_hashes")" = "400" ]
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
-    "${RBASE}/hydd/tag_hashes?tag=no:such-tag")" = "404" ]
+    "${RBASE}/hyd/tag_hashes?tag=no:such-tag")" = "404" ]
 
 HELPER_HASHES=$(HYD_BIN="${BIN}" HYD_CONFIG="${WORK}/reverse.conf" \
     "${ROOT}/contrib/hyd" hashes --limit 1 -- "series:alpha" 2>/dev/null)
@@ -506,7 +506,7 @@ printf '%s\n' "${HELPER_AFTER}" | grep -q "${L1}"
 AND_PAGE=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
     -H 'Content-Type: application/json' \
     -d '{"tags":["series:alpha","character:beta"]}' \
-    "${RBASE}/hydd/tag_hashes?limit=10")
+    "${RBASE}/hyd/tag_hashes?limit=10")
 echo "${AND_PAGE}" | grep -q "${H1}"
 echo "${AND_PAGE}" | grep -q '"total":null'
 if echo "${AND_PAGE}" | grep -q "${L1}"; then
@@ -517,7 +517,7 @@ fi
 NOT_PAGE=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
     -H 'Content-Type: application/json' \
     -d '{"tags":["series:alpha","-character:beta"]}' \
-    "${RBASE}/hydd/tag_hashes?limit=10")
+    "${RBASE}/hyd/tag_hashes?limit=10")
 echo "${NOT_PAGE}" | grep -q "${L1}"
 if echo "${NOT_PAGE}" | grep -q "${H1}"; then
     echo "negated tag was not excluded" >&2
@@ -527,35 +527,35 @@ fi
 EMPTY_AND=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
     -H 'Content-Type: application/json' \
     -d '{"tags":["character:beta","creator:gamma"]}' \
-    "${RBASE}/hydd/tag_hashes?limit=10")
+    "${RBASE}/hyd/tag_hashes?limit=10")
 echo "${EMPTY_AND}" | grep -q '"hashes":\[\]'
 
 DELTA_AND=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
     -H 'Content-Type: application/json' \
     -d '{"tags":["character:delta","creator:gamma"]}' \
-    "${RBASE}/hydd/tag_hashes?limit=10")
+    "${RBASE}/hyd/tag_hashes?limit=10")
 echo "${DELTA_AND}" | grep -q "${H3}"
 
 # Excluding a tag that does not exist is a no-op; exclusion-only is refused.
 NOOP_NOT=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
     -H 'Content-Type: application/json' \
     -d '{"tags":["series:alpha","-no:such-tag"]}' \
-    "${RBASE}/hydd/tag_hashes?limit=10")
+    "${RBASE}/hyd/tag_hashes?limit=10")
 echo "${NOOP_NOT}" | grep -q "${H1}"
 echo "${NOOP_NOT}" | grep -q "${L1}"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
     -H 'Content-Type: application/json' -d '{"tags":["-character:beta"]}' \
-    "${RBASE}/hydd/tag_hashes")" = "400" ]
+    "${RBASE}/hyd/tag_hashes")" = "400" ]
 python3 - "${WORK}/too-many-tags.json" <<'PY'
 import json, sys
 json.dump({"tags": [f"test:t{i}" for i in range(17)]}, open(sys.argv[1], "w"))
 PY
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
     -H 'Content-Type: application/json' --data-binary "@${WORK}/too-many-tags.json" \
-    "${RBASE}/hydd/tag_hashes")" = "400" ]
+    "${RBASE}/hyd/tag_hashes")" = "400" ]
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
     -H 'Content-Type: application/json' -d '{"tags":["no:such-tag","character:beta"]}' \
-    "${RBASE}/hydd/tag_hashes")" = "404" ]
+    "${RBASE}/hyd/tag_hashes")" = "404" ]
 
 HELPER_AND=$(HYD_BIN="${BIN}" HYD_CONFIG="${WORK}/reverse.conf" \
     "${ROOT}/contrib/hyd" hashes --limit 10 -- "series:alpha" "character:beta" 2>/dev/null)
@@ -583,7 +583,7 @@ REPAIR_READY=0
 for _ in $(seq 1 100); do
     if [ "$(curl -s -o /dev/null -w '%{http_code}' \
         -H "Hydrus-Client-API-Access-Key: ${KEY}" \
-        "${RBASE}/hydd/tag_hashes?tag=series:alpha")" = "200" ]; then
+        "${RBASE}/hyd/tag_hashes?tag=series:alpha")" = "200" ]; then
         REPAIR_READY=1
         break
     fi
@@ -823,13 +823,13 @@ DAEMON_PID=$!
 sleep 1
 
 # Disabled features answer 404 (each consumes one of the six burst tokens).
-[ "$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/hydd/tag_counts?tags=series:alpha")" = "404" ]
-[ "$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/hydd/tag_hashes?tag=series:alpha")" = "404" ]
+[ "$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/hyd/tag_counts?tags=series:alpha")" = "404" ]
+[ "$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/hyd/tag_hashes?tag=series:alpha")" = "404" ]
 
 for _ in 1 2 3; do
-    [ "$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/hydd/health")" = "200" ]
+    [ "$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/hyd/health")" = "200" ]
 done
-LIMITED=$(curl -s -D "${WORK}/rate-headers" -o /dev/null -w '%{http_code}' "${BASE}/hydd/health")
+LIMITED=$(curl -s -D "${WORK}/rate-headers" -o /dev/null -w '%{http_code}' "${BASE}/hyd/health")
 [ "${LIMITED}" = "429" ]
 grep -qi '^retry-after:' "${WORK}/rate-headers"
 
