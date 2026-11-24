@@ -110,7 +110,7 @@ void print_help()
         "  -V, --version              Show the version\n"
         "\n"
         "The daemon serves the Hydrus Client API read-only subset documented in\n"
-        "the hydd(8) man page and README.\n";
+        "hydd(8) and contrib/docs/api.md.\n";
 }
 
 std::optional<Options> parse_options(int argc, char** argv, std::string& error)

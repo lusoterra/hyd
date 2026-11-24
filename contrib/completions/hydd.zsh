@@ -14,7 +14,14 @@ _arguments -s -S \
     '--scan-updates[parse every cached update file and report format errors]' \
     '--repair-cache[re-download missing or corrupt cached update files and exit]' \
     '--stats[query the running local API and print repository statistics]' \
-    '--print-access-key[print the API access key and exit]' \
+    '--rebuild-tag-counts[rebuild the derived tag counts and name index and exit]' \
+    '--check-tag-counts[verify the derived tag counts and name index and exit]' \
+    '--tag-counts[query the running API for mapping counts]:tag:' \
+    '--tag-hashes[query the running API for hashes matching tags]:tag:' \
+    '--hash-offset[page offset for --tag-hashes]:offset:' \
+    '--hash-after[continue after a next_after hash id]:id:' \
+    '--hash-limit[page size for --tag-hashes]:limit:' \
+    '--print-access-key[print every configured API access key and exit]' \
     '--log-level[log verbosity]:level:(trace debug info warn error off)' \
     '(-h --help)'{-h,--help}'[show help]' \
     '(-V --version)'{-V,--version}'[show version]'

@@ -5,6 +5,11 @@ _hyd()
     local -a commands
     commands=(
         'stats:show daemon, repository and build statistics'
+        'counts:mapping count for one or more tags'
+        'hashes:page the reverse tag lookup (tags are ANDed; -tag excludes)'
+        'hashes-after:continue a reverse lookup after a next_after id'
+        'rebuild-counts:rebuild the derived tag counts and name index'
+        'check:verify the store and the derived counts'
         'scan:parse every cached update file and report problems'
         'repair:re-download missing or corrupt cached update files'
         'verify:open and validate the local store'
@@ -12,22 +17,25 @@ _hyd()
         'help:show usage'
     )
 
-    _arguments -C \
-        '--sha256[hash files with SHA-256 (default)]' \
-        '--sha1[hash files with SHA-1]' \
-        '--md5[hash files with MD5]' \
-        '(-h --help)'{-h,--help}'[show usage]' \
-        '(-V --version)'{-V,--version}'[show version]' \
-        '1:file or hash:->target' \
-        '*::argument:->argument'
+    if (( CURRENT == 2 )); then
+        _alternative \
+            'commands:command:compadd -a commands' \
+            'files:file:_files'
+        return
+    fi
 
-    case $state in
-        target)
-            _alternative \
-                'commands:command:compadd -a commands' \
-                'files:file:_files'
+    case "${words[2]}" in
+        hashes)
+            _arguments \
+                '--offset[page offset]:offset:' \
+                '--limit[page size 1-1000]:limit:' \
+                '--after[continue after a next_after id]:id:' \
+                '*:tag:'
             ;;
-        argument)
+        counts|hashes-after)
+            _arguments '*:tag:'
+            ;;
+        *)
             _files
             ;;
     esac

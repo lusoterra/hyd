@@ -5,7 +5,7 @@ _hyd()
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
 
-    local commands="stats scan repair verify version help"
+    local commands="stats counts hashes hashes-after rebuild-counts check scan repair verify version help"
     local flags="--sha256 --sha1 --md5 --help --version"
 
     if [ "${COMP_CWORD}" -eq 1 ]; then
@@ -14,7 +14,10 @@ _hyd()
     fi
 
     case "${COMP_WORDS[1]}" in
-        stats|scan|repair|verify|version|help)
+        hashes)
+            COMPREPLY=( $(compgen -W "--offset --limit --after" -- "${cur}") )
+            ;;
+        stats|counts|hashes-after|rebuild-counts|check|scan|repair|verify|version|help)
             ;;
         *)
             COMPREPLY=( $(compgen -f -- "${cur}") )

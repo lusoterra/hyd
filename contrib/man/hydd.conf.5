@@ -1,4 +1,4 @@
-.TH HYDD.CONF 5 "2026-11-23" "hydd 0.7.2" "File Formats"
+.TH HYDD.CONF 5 "2026-11-24" "hydd 0.8.0" "File Formats"
 .SH NAME
 hydd.conf \- configuration for the hydd Hydrus PTR mirror daemon
 .SH DESCRIPTION
@@ -23,7 +23,7 @@ and
 .IR 45869 .
 .TP
 .B access_key ", " access_key_file
-API access keys. 
+API access keys.
 .I access_key
 may contain one key or several comma-separated keys. If it is empty, keys are
 read from
@@ -93,6 +93,49 @@ that no longer matches its name. A full pass is triggered when the relay finds
 an incomplete cache, at most once per ten minutes. Default true. This only
 changes the update cache, never the query store.
 .TP
+.B tag_counts_enabled
+Build and serve the derived tag counts used by
+.BR /hyd/tag_counts .
+Default true. This writes
+.I store/counts.bin
+(4 bytes per defined tag id) and
+.I store/tag_lookup.bin
+(8 bytes per defined tag id), roughly 660 MB at 55 million tags. Counts are
+exact storage-tag mapping counts, include the pending delta journal, and do not
+expand siblings or parents.
+.TP
+.B tag_counts_rebuild_after_sync
+Recount every partition after each sync instead of applying the delta journal
+in memory. Default false; it is rarely needed.
+.TP
+.B tag_hashes_enabled
+Build and serve the reverse tag index used by
+.BR /hyd/tag_hashes .
+Default false. It requires
+.B tag_counts_enabled = true
+and adds
+.I store/tag_postings.bin
+(4 bytes per mapping) and
+.I store/hash_index.bin
+(8 bytes per hash), roughly 18 GB at current PTR sizes.
+.TP
+.B max_connections
+Maximum concurrent API sockets. Default 128; the accepted range is 1 to 4096.
+Excess connections receive 503 with Retry-After.
+.TP
+.B rate_limit_enabled
+Enable the per-key or per-peer token bucket. Default true.
+.TP
+.B rate_limit_requests_per_minute
+Sustained request rate. Default 600.
+.TP
+.B rate_limit_burst
+Token bucket size. Default 120.
+.TP
+.B rate_limit_local_bypass
+Exempt loopback peers from the bucket. Default false, because a reverse proxy
+makes public traffic look local.
+.TP
 .B download_workers
 Number of parallel update-file downloads. Each worker reuses one TLS
 connection. Default 8; maximum 32.
@@ -130,4 +173,5 @@ against the real PTR must stay under 10 GiB.
 .SH FILES
 .I /etc/hydd.conf
 .SH SEE ALSO
+.BR hyd (1),
 .BR hydd (8)

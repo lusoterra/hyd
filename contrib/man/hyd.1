@@ -1,0 +1,249 @@
+.TH HYD 1 "2026-11-24" "hydd 0.8.0" "User Commands"
+.SH NAME
+hyd \- query and maintain a hydd Hydrus PTR mirror
+.SH SYNOPSIS
+.B hyd
+.RI [ \-\-sha256 | \-\-sha1 | \-\-md5 ]
+.I FILE
+.br
+.B hyd
+.I HASH
+.br
+.B hyd
+.B stats
+.br
+.B hyd
+.B counts
+.I TAG
+.RI [ TAG ...]
+.br
+.B hyd
+.B hashes
+.RB [ \-\-offset
+.IR N ]
+.RB [ \-\-limit
+.IR N ]
+.RB [ \-\-after
+.IR ID ]
+.I TAG
+.RI [ TAG ...]
+.br
+.B hyd
+.B hashes\-after
+.I TAG ID
+.RI [ LIMIT ]
+.br
+.B hyd
+.BR rebuild\-counts | check | scan | repair | verify | version
+.SH DESCRIPTION
+.B hyd
+is a small companion client for
+.BR hydd (8).
+It hashes a file or accepts a hash, asks the running local API for that file's
+tags, prints derived tag statistics, and runs the maintenance commands that
+operate on the store or the update cache.
+.PP
+Query commands use the local API, so the daemon must be running. Loopback
+requests are trusted by default. If the daemon sets
+.B require_localhost_key = true\fR,
+run as the
+.I hyd
+user or set
+.B HYDD_API_KEY
+to a configured access key.
+.SH COMMANDS
+.TP
+.BI "hyd " FILE
+Hash
+.I FILE
+with SHA-256 (the default) and print its storage and display tags. The output
+starts with a comment line containing the file name, algorithm, and hash.
+.TP
+.BI "hyd " HASH
+Query a 64-character SHA-256, 40-character SHA-1, or 32-character MD5 hash
+directly. An argument that is both a valid hash and an existing file name is
+rejected as ambiguous; write
+.I ./FILE
+to force the file interpretation.
+.TP
+.B hyd stats
+Print repository statistics, sync state, live build progress, and an estimate
+of when the next PTR update will be applied. Equivalent to
+.BR "hydd \-\-stats" .
+.TP
+.BI "hyd counts " TAG ...
+Ask the running API for the exact current mapping count of each storage tag.
+One line of the form
+.IR "TAG<TAB>COUNT"
+is printed per tag. A tag that is not defined in the repository is reported
+as unknown. This requires
+.B tag_counts_enabled = true
+(the default) and exits non-zero if any lookup fails.
+.TP
+.BI "hyd hashes " "[options] " TAG ...
+Page the reverse tag index. Several tags are ANDed, and a tag beginning with
+.B \-
+is excluded (AND NOT). One SHA-256 hash is printed per line; page progress
+goes to stderr. The options must come before the tags:
+.RS
+.TP
+.BI \-\-offset " " N
+Start at page offset
+.I N
+(default 0, maximum 10000000).
+.TP
+.BI \-\-limit " " N
+Page size, 1 to 1000 (default 100).
+.TP
+.BI \-\-after " " ID
+Continue after the internal hash id
+.I ID
+from a previous response's
+.IR next_after .
+This is mutually exclusive with
+.B \-\-offset
+and has no depth cap.
+.RE
+.IP
+Requires
+.B tag_hashes_enabled = true
+and
+.B tag_counts_enabled = true
+in the daemon configuration.
+.TP
+.BI "hyd hashes\-after " "TAG ID " [ LIMIT ]
+Continue a single-tag reverse lookup after the
+.I ID
+returned as
+.IR next_after .
+.I LIMIT
+defaults to 100.
+.TP
+.B hyd rebuild\-counts
+Rebuild the derived
+.I counts.bin
+and
+.I tag_lookup.bin
+files and exit. This reads the live store and is CPU and I/O heavy on a full
+mirror. If the data directory is root-owned, the command retries through
+.B doas
+or
+.B sudo
+when the first attempt looks like a permission or daemon-lock failure.
+.TP
+.B hyd check
+Run
+.B hydd \-\-verify\-store
+followed by
+.BR "hydd \-\-check\-tag\-counts" .
+This validates the store and recounts the derived tag metadata without writing
+anything. Run it while a compaction is not in flight for a guaranteed-consistent
+result.
+.TP
+.B hyd scan
+Parse every cached update file with the current importer and report files that
+would make a sync fail. Equivalent to
+.BR "hydd \-\-scan\-updates" .
+.TP
+.B hyd repair
+Re-hash every update file referenced by the repository metadata and re-download
+missing or corrupt entries. Requires
+.B keep_update_cache = true
+in the daemon configuration. Equivalent to
+.BR "hydd \-\-repair\-cache" .
+.TP
+.B hyd verify
+Open and validate the store and print its counts. Equivalent to
+.BR "hydd \-\-verify\-store" .
+.TP
+.B hyd version
+Print the daemon version in the form
+.IR "hyd vX.Y.Z" .
+.SH OPTIONS
+.TP
+.B \-\-sha256
+Hash
+.I FILE
+with SHA-256. This is the default.
+.TP
+.B \-\-sha1
+Hash
+.I FILE
+with SHA-1 for legacy lookups.
+.TP
+.B \-\-md5
+Hash
+.I FILE
+with MD5 for legacy lookups.
+.TP
+.BR \-h ", " \-\-help
+Show usage.
+.TP
+.BR \-V ", " \-\-version
+Equivalent to
+.BR "hyd version" .
+.SH ENVIRONMENT
+.TP
+.B HYD_BIN
+The
+.B hydd
+executable to run. Default:
+.IR hydd .
+.TP
+.B HYD_CONFIG
+The configuration file passed to
+.BR hydd .
+Default:
+.IR /etc/hydd.conf .
+.TP
+.B HYDD_API_KEY
+Access key used by
+.B hydd \-\-stats
+and the API-backed lookups against an instance that requires a key from
+localhost.
+.SH FILES
+.TP
+.I /etc/hydd.conf
+Default configuration file for the daemon.
+.TP
+.I /var/lib/hyd
+Default data directory: store, delta journal, sync state, update cache, and
+generated keys.
+.SH EXAMPLES
+Look up tags for a file:
+.PP
+.nf
+    hyd photo.jpg
+.fi
+.PP
+Query a hash directly:
+.PP
+.nf
+    hyd 4c77267f93415de0bc33b7725b8c331a809a924084bee03ab2f5fae1c6019eb2
+.fi
+.PP
+Count mappings for several tags:
+.PP
+.nf
+    hyd counts "series:touhou" "character:reimu"
+.fi
+.PP
+Page the files for a tag and continue from the cursor:
+.PP
+.nf
+    hyd hashes --limit 1000 "series:touhou"
+    hyd hashes-after "series:touhou" 123456 1000
+.fi
+.PP
+Verify the store and the derived counts:
+.PP
+.nf
+    hyd check
+.fi
+.SH EXIT STATUS
+Zero on success. Usage errors, failed lookups, and failed maintenance commands
+return non-zero.
+.SH SEE ALSO
+.BR hydd (8),
+.BR hydd.conf (5),
+.IR https://github.com/lusoterra/hyd .

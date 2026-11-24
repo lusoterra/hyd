@@ -19,6 +19,14 @@
 - Hydrus-compatible access keys, session keys, error codes, and JSON shapes.
 - Rotating log file with gzip retention.
 
+## Documentation
+
+- [`contrib/docs/api.md`](contrib/docs/api.md) - every endpoint, parameter, response shape, and error code
+- [`contrib/docs/examples.md`](contrib/docs/examples.md) - runnable curl and helper recipes
+- `man hydd` - daemon options, storage, and API summary
+- `man hyd` - helper client commands
+- `man hydd.conf` - configuration settings
+
 ## Build
 
 Arch Linux dependencies:
@@ -99,6 +107,7 @@ Implemented read-only endpoints:
 
 | Endpoint | Notes |
 | --- | --- |
+| `GET /` | HTML landing page, no auth |
 | `GET /api_version` | No auth |
 | `GET /session_key` | 24-hour session keys |
 | `GET /verify_access_key` | Reports search permission |
@@ -107,14 +116,14 @@ Implemented read-only endpoints:
 | `GET /get_service` | By name or key |
 | `GET/POST /get_files/file_metadata` | Hashes (SHA-256, legacy SHA-1/MD5), services, storage/display tags |
 | `GET/POST /get_files/file_hashes` | SHA-256 to SHA-256 only |
-| `GET /hyd/health` | hydd extension: build and sync status |
-| `GET /hyd/stats` | hydd extension: `/hyd/health` superset with derived sync estimates |
+| `GET /health` | Hydrus parity: build and sync status, no auth |
+| `GET /hyd/stats` | hydd extension: `/health` superset with derived sync estimates |
 | `GET/POST /hyd/tag_counts` | hydd extension: current mapping count per storage tag |
-| `GET /hyd/tag_hashes` | hydd extension: paged SHA-256 hashes for one storage tag (`tag_hashes_enabled = true`) |
+| `GET/POST /hyd/tag_hashes` | hydd extension: paged SHA-256 hashes for storage tags (`tag_hashes_enabled = true`) |
 | `GET /metadata` | Read-only repository relay metadata, with `keep_update_cache = true` |
 | `GET /update` | Read-only repository relay update files, with `keep_update_cache = true` |
 
-Every endpoint except `/api_version`, `/hyd/health`, and `/` requires an access or session key. `/hyd/health` stays unauthenticated for Hydrus parity; `/hyd/stats` (the richer hydd superset) requires authorization, but loopback trust means local `hyd --stats` still works with no flags. The old top-level `/health` and `/stats` paths were moved under `/hyd/` in 0.8.0 and now return 404. JSON only; CBOR returns `406`. Media, thumbnail, tag-search, and mutation endpoints are not implemented. File facts the PTR does not publish (`size`, `mime`, dimensions, URLs, ratings, notes) are returned as `null` or empty. Unknown file hashes are returned as `{"file_id": null, "hash": "..."}`. Unknown endpoints return a `404` JSON body with `error` and `path`. At most 1000 hashes per metadata/hashes request and at most 1000 tags per tag-count request; at most `max_connections` concurrent API connections; at most 32 live sessions per configured access key (429 beyond that).
+Every endpoint except `/api_version`, `/health`, and `/` requires an access or session key. `/health` is unauthenticated for Hydrus parity; `/hyd/stats` (the richer hydd superset) requires authorization, but loopback trust means local `hyd --stats` still works with no flags. The old top-level `/stats` path was moved under `/hyd/` in 0.8.0 and now returns 404. JSON only; CBOR returns `406`. Media, thumbnail, tag-search, and mutation endpoints are not implemented. File facts the PTR does not publish (`size`, `mime`, dimensions, URLs, ratings, notes) are returned as `null` or empty. Unknown file hashes are returned as `{"file_id": null, "hash": "..."}`. Unknown endpoints return a `404` JSON body with `error` and `path`. At most 1000 hashes per metadata/hashes request and at most 1000 tags per tag-count request; at most `max_connections` concurrent API connections; at most 32 live sessions per configured access key (429 beyond that).
 
 Example:
 
@@ -173,7 +182,7 @@ A read-only relay is still good for decentralisation: it serves the same update 
 - The PTR is a centralized Hydrus server, not peer-to-peer. It publishes SHA-256 hashes, tags, and tag relationships. A small number of very old files only have a legacy SHA-1 (or MD5) hash; hydd indexes and preserves those too, and `file_metadata` accepts 40- and 32-character hexadecimal hashes in addition to 64-character SHA-256.
 - If an update contains a serialisable version, definition/content type, action, or metadata version this build does not understand, hydd aborts the sync pass with an error and leaves the existing store untouched instead of silently dropping rows. File-add records are the only known no-op, since they carry no tag data.
 - The PTR contains exactly four hash-table values that are not valid SHA-256/SHA-1/MD5 hashes and can never be queried. Those four are skipped and reported as expected, matching what the official Hydrus client does (it stores them as opaque blobs and never resolves them). Any other invalid value still aborts the sync. The raw cache and `/metadata`/`/update` relay preserve the four exactly as the PTR served them; only hydd's derived query index omits them.
-- `/hyd/health` is unauthenticated (Hydrus parity). `/hyd/stats` requires authorization and exposes the same aggregate counts plus sync timing, build progress, store totals, and a `features` block: `seeding` (enabled), `tag_counts` (enabled, ready, delta applied, defined tags, bytes, as_of) and `tag_hashes` (enabled, ready, bytes, as_of) - no keys, hashes, or tags. `hyd stats` renders the same feature states. `hydd --stats` sends your configured keys automatically (or `HYDD_API_KEY`), so it works unprivileged locally and against `require_localhost_key = true` hosts. Keep `listen_address = 127.0.0.1` unless you accept publishing `/hyd/health`. Both paths moved under `/hyd/` in 0.8.0; the old top-level spellings return 404.
+- `/health` is unauthenticated (Hydrus parity). `/hyd/stats` requires authorization and exposes the same aggregate counts plus sync timing, build progress, store totals, and a `features` block: `seeding` (enabled), `tag_counts` (enabled, ready, delta applied, defined tags, bytes, as_of) and `tag_hashes` (enabled, ready, bytes, as_of) - no keys, hashes, or tags. `hyd stats` renders the same feature states. `hydd --stats` sends your configured keys automatically (or `HYDD_API_KEY`), so it works unprivileged locally and against `require_localhost_key = true` hosts. Keep `listen_address = 127.0.0.1` unless you accept publishing `/health`. The `/stats` extension moved under `/hyd/` in 0.8.0; the old top-level spelling returns 404.
 - `tag_counts_enabled = true` (the default) makes the build and every compaction write `store/counts.bin` and `store/tag_lookup.bin`. Counts are 4 bytes per defined tag id, the name index 8 bytes per defined tag, so together about 660 MB at 55 million tags on top of the 25-30 GB store. A store built before 0.8.0 starts building them in the background on the first start (the API answers 503 from `/hyd/tag_counts` until it finishes), or explicitly with `hydd --rebuild-tag-counts`. Counts cover exact storage tags only: no sibling or parent expansion, and they include the pending delta journal. `hydd --check-tag-counts` recounts and verifies the files without writing (it reads the live store, so run it while a compaction is not in flight for a guaranteed-consistent result); `hydd --tag-counts TAG` queries the running API.
 - Incremental syncs do not need a recount: the delta journal is applied to the base counts in memory, so new mappings and deletions show up without the minutes-long per-hash verification on the startup path. That overlay is computed in the background after the API is up (and after each sync); until it finishes, `/hyd/tag_counts` reports the base counts, `features.tag_counts.delta_applied` is false, and `hyd stats` shows `delta pending`. Compaction rewrites the base counts inline while it already walks every partition. `tag_counts_rebuild_after_sync = true` forces a full recount after each sync anyway; it is off by default because it re-reads the whole store.
 - `tag_hashes_enabled = true` adds the reverse index: `store/tag_postings.bin` (4 bytes per mapping, ~17 GB at 4.18B mappings) and `store/hash_index.bin` (8 bytes per hash, ~1.6 GB at 206M hashes). It is built only when enabled, during the initial build, compaction, or the background upgrade build, and requires `tag_counts_enabled = true`. Every request returns one bounded page (1-1000 hashes), and results include the pending delta.

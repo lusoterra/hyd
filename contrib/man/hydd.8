@@ -1,4 +1,4 @@
-.TH HYDD 8 "2026-11-23" "hydd 0.7.2" "System Administration"
+.TH HYDD 8 "2026-11-24" "hydd 0.8.0" "System Administration"
 .SH NAME
 hydd \- read-only Hydrus Public Tag Repository mirror daemon
 .SH SYNOPSIS
@@ -76,8 +76,51 @@ Query the running local API and print repository statistics, sync state,
 live initial-build progress, and an estimate of when the next PTR update
 will be applied. Does not need root or access to the data directory.
 .TP
+.B \-\-rebuild\-tag\-counts
+Rebuild the derived tag counts
+.RB ( store/counts.bin )
+and name index
+.RB ( store/tag_lookup.bin )
+and exit. This reads the live store and is CPU and I/O heavy on a full mirror.
+.TP
+.B \-\-check\-tag\-counts
+Recount the store and verify the derived tag counts and name index without
+writing them. Run it while a compaction is not in flight for a
+guaranteed-consistent result.
+.TP
+.BI \-\-tag\-counts " " TAG
+Query the running API for the number of current mappings of
+.IR TAG .
+Repeat the option to query several tags.
+.TP
+.BI \-\-tag\-hashes " " TAG...
+Query the running API for one page of SHA-256 hashes matching the tags.
+Multiple tags are ANDed and a leading
+.B \-
+excludes a tag; use
+.B \-\-
+before tags that begin with a dash. Requires
+.B tag_hashes_enabled = true
+and
+.BR tag_counts_enabled = true .
+.TP
+.BI \-\-hash\-offset " " N
+Page offset for
+.BR \-\-tag\-hashes .
+Default 0; at most 10000000.
+.TP
+.BI \-\-hash\-after " " ID
+Continue after the internal hash id returned as
+.I next_after
+instead of using an offset.
+.TP
+.BI \-\-hash\-limit " " N
+Page size for
+.BR \-\-tag\-hashes ,
+1 to 1000. Default 100.
+.TP
 .B \-\-print\-access\-key
-Print the API access key and exit.
+Print every configured API access key and exit.
 .TP
 .BI \-\-log\-level " " LEVEL
 One of
@@ -94,8 +137,8 @@ Show the version.
 Default configuration file.
 .TP
 .I /var/lib/hyd
-Default data directory. Contains the store, delta journal, sync state, and
-generated keys.
+Default data directory. Contains the store, delta journal, sync state, update
+cache, and generated keys.
 .TP
 .I /var/lib/hyd/api_access_key
 Generated API access key (mode 0600).
@@ -147,6 +190,36 @@ during a repair; use
 .B hydd \-\-repair\-cache
 to run the same check explicitly.
 .TP
+.B tag_counts_enabled
+Build and serve the derived tag counts used by
+.BR /hyd/tag_counts .
+Default true. This adds about 4 bytes per defined tag plus 8 bytes per tag for
+the name index (roughly 660 MB at 55 million tags).
+.TP
+.B tag_counts_rebuild_after_sync
+Force a full tag-count rebuild after every sync. Default false; the pending
+delta journal is normally applied in memory, so no rescans are needed.
+.TP
+.B tag_hashes_enabled
+Build and serve the reverse tag index used by
+.BR /hyd/tag_hashes .
+Default false. It requires
+.B tag_counts_enabled = true
+and adds roughly 18 GB at current PTR sizes.
+.TP
+.B max_connections
+Maximum concurrent API sockets. Default 128; excess connections receive 503.
+.TP
+.B rate_limit_enabled ", " rate_limit_requests_per_minute ", " rate_limit_burst ", " rate_limit_local_bypass
+Per-key or per-peer token bucket. Defaults: enabled, 600 requests per minute,
+120 burst, and loopback not exempt. A limited client receives 429 with
+Retry-After.
+.TP
+.B download_workers ", " download_timeout_seconds ", " download_rate_limit_kib
+Update download concurrency (default 8, maximum 32), per-request timeout
+(default 120 seconds), and optional rate limit in KiB/s (default 0,
+unlimited).
+.TP
 .B log_file ", " log_rotate_mb ", " log_rotate_keep ", " log_rotate_compress
 Rotating gzip log. Defaults:
 .IR /var/log/hyd/hyd.log ", 10 MiB, 5 files, enabled."
@@ -157,6 +230,7 @@ Development/test limits. Automated tests must stay under 10 GiB of downloads.
 The following read-only Client API endpoints are implemented:
 .PP
 .nf
+GET  /
 GET  /api_version
 GET  /session_key
 GET  /verify_access_key
@@ -165,35 +239,49 @@ GET  /get_services
 GET  /get_service
 GET  /get_files/file_metadata
 GET  /get_files/file_hashes
-GET  /hyd/health          (hydd extension)
-GET  /hyd/stats           (hydd extension: /hyd/health superset)
+GET  /health              (Hydrus parity, no auth)
+GET  /hyd/stats           (hydd extension: /health superset)
+GET  /hyd/tag_counts      (hydd extension, GET/POST)
+GET  /hyd/tag_hashes      (hydd extension, GET/POST, tag_hashes_enabled)
 GET  /metadata            (repository relay, keep_update_cache)
 GET  /update              (repository relay, keep_update_cache)
 .fi
 .PP
 Every endpoint except
-.IR / ", " /api_version ", " /hyd/health
+.IR / ", " /api_version ", " /health
 requires the
 .B Hydrus-Client-API-Access-Key
 header, the
 .B Hydrus-Client-API-Session-Key
+header, the repository
+.B Hydrus-Key
 header, or the same parameter in the query string or JSON body. Missing keys
 return 401, invalid keys 403, expired session keys 419, and a full session
 table 429. Loopback TCP peers skip the key check by default, including when
 they send a bogus key, so local
-.B hyd --stats
+.B hydd --stats
 and
-.B hyd --api-query
+.B hydd --api-query
 work with no flags. Set
 .B require_localhost_key
 to require a valid key from localhost as well; the local helpers then try
 .B HYDD_API_KEY
 and the configured keys automatically.
-.B /hyd/health
+.B /health
 stays unauthenticated for Hydrus parity;
 .B /hyd/stats
 (the richer hydd superset) requires authorization.
 At most 32 live sessions are minted per configured access key.
+.PP
+The old top-level
+.B /stats
+path returns 404; use
+.BR /hyd/stats .
+Unknown endpoints return a JSON 404 with
+.B error
+and
+.B path
+fields.
 .PP
 .B /metadata
 and
@@ -208,7 +296,12 @@ petitions.
 .PP
 The server speaks JSON only. CBOR requests return 406. File and thumbnail
 endpoints return 404 because the mirror stores no files. Search and mutation
-endpoints return 501.
+endpoints return 501. The full request and response reference, with runnable
+curl examples, is in
+.I contrib/docs/api.md
+and
+.I contrib/docs/examples.md
+in the source tree.
 .SH EXAMPLES
 Run one sync and exit:
 .PP
@@ -265,6 +358,7 @@ Cached update files are verified on sync and can be healed automatically;
 .B hydd \-\-repair\-cache
 runs the same check explicitly.
 .SH SEE ALSO
+.BR hyd (1),
 .BR systemctl (1),
 .BR hydd.conf (5),
 .IR https://hydrusnetwork.github.io/hydrus/ .
