@@ -181,6 +181,56 @@ action in the user's own client against the real PTR.
   copyright questions are out of scope, but it also cannot replace the social
   and moderation side of the PTR.
 
+## Scaling with a mirror fleet
+
+A useful topology is: the PTR stays authoritative, several Hyd instances serve
+the update stream, and clients download from the nearest mirror while writes
+still go to the PTR.
+
+```
+                 writes (tags, petitions)
+client  -------------------------------->  PTR (authoritative)
+   \                                          ^
+    \  GET /metadata, GET /update            | mirrors sync once
+     v                                        |
+  hyd mirror A   hyd mirror B   hyd mirror C -+
+```
+
+Why it fits:
+
+- Update files are immutable and hash-addressed, so mirrors are natural caches
+  and can be seeded from the PTR or from each other.
+- Clients still download everything and keep their own database, so there is no
+  central query oracle and the Hydrus privacy model is unchanged.
+- The large transfer is the initial update stream, not hash lookups. Offloading
+  it removes most PTR egress. Offloading the `/hyd/*` query endpoints is a
+  separate, smaller win for third-party tools.
+- Writes stay centralized, moderated, and rate-limited on the PTR.
+
+What is still missing for this to be smooth:
+
+- **Two URLs per service.** A Hydrus repository service stores one URL, one
+  access key, and one service key. "Download from a mirror, write to the PTR"
+  needs either a client-side `download_url`/`mirror_of` field with the PTR as
+  the write target, or a way to attach a mirror to an existing service. Adding
+  a second service does not work well because the service key identifies the
+  repository and clients key services by that key.
+- **Freshness and trust.** A mirror can lag. The strongest design fetches the
+  small `/metadata` response from the authoritative PTR and the large
+  `/update` bodies from a mirror, verifying each file against the hash in that
+  metadata. A client that trusts the mirror for both gets the mirror's
+  freshness and trust level. Repository metadata is not signed, so a mirror is
+  a trust choice, not a cryptographic guarantee.
+- **Discovery and failover.** Clients need a mirror list or a DNS/round-robin
+  entry point, plus a fallback to the PTR and a way to avoid a stale mirror.
+- **Operations.** Each relay mirror needs a complete cache (`keep_update_cache`,
+  roughly 21 GiB), TLS, rate limits, lag monitoring, and enough egress. A
+  store is optional for relay-only mirrors; query endpoints need the store.
+
+This is the part worth taking to the Hydrus developer alongside the read-only
+profile: a read-only service that advertises its upstream identity, supports a
+separate download source, and never accepts writes.
+
 ## If your client supports both Hydrus and Hyd
 
 Model them as two backends, not one:
