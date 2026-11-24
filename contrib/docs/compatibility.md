@@ -231,6 +231,37 @@ This is the part worth taking to the Hydrus developer alongside the read-only
 profile: a read-only service that advertises its upstream identity, supports a
 separate download source, and never accepts writes.
 
+## Bootstrap from a mirror, then switch to the PTR
+
+Until a client supports separate download and write URLs, a simpler workflow is
+enough: add a complete Hyd mirror as the repository, let it download the bulk of
+the stream, then edit the repository URL and access key to point at the real
+PTR. The client keeps its local database and update index, so switching hosts
+only fetches whatever the PTR has that the mirror did not, and writes continue
+against the PTR as normal.
+
+Requirements:
+
+- The mirror must present the **same service key, type, and name** as the PTR,
+  and serve the exact same update stream. Otherwise the client sees a different
+  repository and the tags do not line up.
+- The mirror's cache must be complete (`keep_update_cache = true`), or
+  `/metadata` returns 503 and the initial sync stalls.
+- The mirror must implement the same read-only repository envelope as above
+  (`/service_info`, session cookie, `/metadata`, `GET /update`, account/options).
+  Without it the client cannot add even the mirror.
+- The user changes both the URL and the access key to the PTR's public values,
+  and trusts the mirror for the data it seeded. A mirror that served a divergent
+  stream would leave the client in a state the PTR cannot reconcile.
+
+This removes the heavy initial transfer from the PTR without needing any new
+client feature, which makes it the practical first step. If the mirror's
+`next_update_due` is still in the future after the switch, trigger the client's
+check-for-updates action so it does not wait for the old schedule. The cost is
+that every user still switches manually, and the mirror must be trustworthy and
+current enough to be a useful seed. A future `download_url`/`mirror_of` field
+would make the same topology automatic.
+
 ## If your client supports both Hydrus and Hyd
 
 Model them as two backends, not one:
