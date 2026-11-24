@@ -1,0 +1,147 @@
+# Hydrus compatibility
+
+Hydrus is three separate things that are easy to conflate:
+
+1. **The PTR (Public Tag Repository)** - a Hydrus *server*. It stores
+   hash-to-tag mappings and tag relationships. It serves an update stream over
+   the repository protocol (`/metadata`, `/update`) and accepts uploads and
+   petitions from accounts with write permission. It has no media and no
+   general file-query API.
+2. **The Hydrus client** - a local application with its own SQLite database. It
+   downloads the PTR update stream, applies it locally, and adds everything the
+   PTR never stores: files, thumbnails, URLs, notes, ratings, local tags,
+   inbox/archive state, pages, and history.
+3. **The Hydrus Client API** - a localhost HTTP API *served by the client* for
+   automation of that client. Endpoints such as `/get_files/file`,
+   `/get_files/thumbnail`, `/get_files/search_files`, `/add_files/add_file`,
+   and `/add_tags/add_tags` operate on the client's local database and files.
+
+The PTR does not implement the Client API. The client does not use a remote
+Client API as its data source. "Download the whole repository" is how Hydrus
+keeps queries local: each client builds its own tag database instead of asking
+a central service what to tag.
+
+## Where hyd fits
+
+Hyd is a **read-only hybrid**:
+
+| Role | Hyd support |
+| --- | --- |
+| PTR repository update stream, read side (`/metadata`, `/update`) | Yes, when `keep_update_cache = true` and the cache is complete |
+| PTR uploads, petitions, accounts, janitor review | No |
+| Hydrus Client API read-only lookups (`/get_files/file_metadata`, `/get_files/file_hashes`, access/session keys, services, client info) | Partial, read-only |
+| Client API media, thumbnails, search, imports, tag edits, notes, ratings, pages | No, returns `501` JSON |
+| hydd extensions (`/hyd/stats`, `/hyd/tag_counts`, `/hyd/tag_hashes`) | Yes |
+
+Hyd is not a Hydrus client, not a writable PTR, and not a drop-in replacement
+for the client's local database. It answers "which tags does the PTR have for
+this hash?" and can relay the PTR stream to another mirror.
+
+## What works today
+
+- **hydd to hydd mirroring.** A second `hydd` can sync from a `hydd` relay
+  exactly as it syncs from the PTR: `repository_url` points at the relay,
+  `repository_access_key` matches a key the relay accepts, and the client sends
+  `Hydrus-Key` on each `/metadata` and `/update` request. This is covered by the
+  integration tests.
+- **Read-only Client API consumers.** Tools that only need hash lookup and tag
+  metadata can use `/get_files/file_metadata`, `/get_files/file_hashes`,
+  `/hyd/tag_counts`, and `/hyd/tag_hashes`. File facts are `null`/empty, and
+  unsupported endpoints return `501` with a reason.
+- **Bulk local indexing.** `/hyd/tag_hashes` pages hashes for a tag query, so a
+  client can build its own cache without downloading the whole stream.
+
+## Why the official Hydrus client is not supported yet
+
+A Hydrus client can only use a repository after its repository login and
+account sync succeed. The client:
+
+- calls `GET /session_key` with `Hydrus-Key` and expects the server to set a
+  `session_key` **cookie**; every later request carries that cookie;
+- calls `GET /account` and `GET /options` to learn whether the account is
+  functional and what it may do;
+- expects HTTPS for repository URLs.
+
+Hyd currently:
+
+- answers `/session_key` with the **Client API** JSON response (a session key in
+  the body, no cookie), because that path is shared with the Client API;
+- does not accept cookies for authentication;
+- does not implement `/account`, `/options`, `/access_key_verification`, or
+  `/service_info`;
+- serves plain HTTP and does not terminate TLS;
+- has no write, petition, or account endpoints at all.
+
+The metadata/update stream itself is correct and hyd-to-hyd sync passes, but the
+official client's login/account checks will not complete against Hyd as it is
+today. Do not advertise Hyd as a drop-in PTR replacement for the Hydrus client
+yet. Treat official-client support as unimplemented rather than as a bug in the
+relay.
+
+## What it would take to support the official client
+
+At minimum:
+
+1. Distinguish repository `/session_key` from Client API `/session_key`. The
+   repository login sends `Hydrus-Key`; the Client API sends
+   `Hydrus-Client-API-Access-Key` or `Hydrus-Client-API-Session-Key`. The
+   repository path needs a `Set-Cookie: session_key=...` response.
+2. Accept that cookie on `/metadata` and `/update` for non-loopback clients.
+3. Implement a synthetic read-only account for `/account` and `/options`, plus
+   `/access_key_verification` and whatever service-info endpoint the client
+   expects. The account must be functional but grant no upload or petition
+   permission.
+4. Put HTTPS in front, since the client uses `https://` for repositories.
+5. Decide what to do about the client's periodic account/options polling and
+   its "service info" display. A read-only account can work, but it will show
+   no write permissions.
+
+Worth asking the Hydrus developer before building this: whether a minimal
+read-only repository server is an intended use case, which of the account and
+service-info responses are mandatory for login, and whether they would accept a
+documented compatibility profile. Hyd already serves the exact metadata and
+update bytes, so the gap is the surrounding account/session protocol, not the
+stream format.
+
+## If you host Hyd publicly
+
+- It is a read-only mirror plus a hash/tag query oracle. Clients can download
+  the update stream and query hashes; nobody can upload tags or petitions.
+- **Privacy changes.** A self-hosted Hyd keeps hash queries on your machine.
+  A public Hyd sees every hash and tag a client asks for. The PTR
+  download-everything model exists to avoid exactly that central query log.
+  State your logging/retention policy or disable request logging.
+- **Bandwidth and storage.** The relay needs `keep_update_cache = true` and a
+  complete cache (roughly another 21 GiB), and each mirror client may download
+  several GiB. Keep `max_connections`, the rate limits, and a bandwidth budget
+  in mind.
+- **Auth.** There are shared access keys, not per-user accounts. A key can be
+  revoked by removing it and restarting. Loopback trust is dangerous behind a
+  reverse proxy: a public proxy connecting from localhost looks trusted.
+- **TLS.** Hyd speaks plain HTTP. Terminate TLS in a reverse proxy and keep the
+  Hyd listener bound to loopback or a private interface.
+- **No media and no writes.** Hyd stores no files, so media hosting and
+  copyright questions are out of scope, but it also cannot replace the social
+  and moderation side of the PTR.
+
+## If your client supports both Hydrus and Hyd
+
+Model them as two backends, not one:
+
+- **Local Hydrus client API**: usually `http://127.0.0.1:45869`, full local
+  database, files, thumbnails, search, imports, tags. Works only where that
+  client runs.
+- **Hyd remote API**: `http(s)://host:port`, read-only hash/tag lookups and paged
+  reverse search. No files, no thumbnails, no search-by-metadata, no imports.
+
+Both can return the same tag shapes for a known hash, but only the local client
+can answer "show me the file", "search my library", or "add this tag". A booru
+client that only needs hash-to-tag lookups can use either; one that needs media
+needs a Hydrus client or another media source.
+
+## See also
+
+- [api.md](api.md) - Hyd's endpoint reference
+- [examples.md](examples.md) - runnable queries
+- `man hydd` - daemon options
+- Hydrus developer docs: <https://hydrusnetwork.github.io/hydrus/developer_api.html>

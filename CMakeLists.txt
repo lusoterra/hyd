@@ -68,7 +68,8 @@ install(FILES contrib/systemd/hyd.tmpfiles DESTINATION ${CMAKE_INSTALL_LIBDIR}/t
 install(FILES contrib/man/hydd.8 DESTINATION ${CMAKE_INSTALL_MANDIR}/man8)
 install(FILES contrib/man/hydd.conf.5 DESTINATION ${CMAKE_INSTALL_MANDIR}/man5)
 install(FILES contrib/man/hyd.1 DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
-install(FILES contrib/docs/api.md contrib/docs/examples.md DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/hyd)
+install(FILES contrib/docs/api.md contrib/docs/examples.md contrib/docs/compatibility.md
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/hyd)
 install(FILES contrib/completions/hydd.bash DESTINATION ${CMAKE_INSTALL_DATADIR}/bash-completion/completions RENAME hydd)
 install(FILES contrib/completions/hydd.zsh DESTINATION ${CMAKE_INSTALL_DATADIR}/zsh/site-functions RENAME _hydd)
 install(FILES contrib/completions/hydd.fish DESTINATION ${CMAKE_INSTALL_DATADIR}/fish/vendor_completions.d RENAME hydd.fish)

@@ -292,7 +292,15 @@ is true and the cached update set is complete. They serve the exact
 repository update stream and accept the repository
 .B Hydrus-Key
 header as well as the Client API key headers. They never accept uploads or
-petitions.
+petitions. The relay is intended for another
+.BR hydd .
+The official Hydrus client is not supported yet: its repository login expects
+a session cookie and its account sync uses
+.BR /account ,
+.BR /options ,
+and related endpoints that are not implemented. See
+.I contrib/docs/compatibility.md
+for the full explanation.
 .PP
 The server speaks JSON only. CBOR requests return 406. Known Hydrus endpoints
 that the mirror does not serve - files, thumbnails, search, and mutations -

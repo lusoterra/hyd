@@ -249,7 +249,9 @@ curl -s -H "Hydrus-Client-API-Access-Key: $KEY" \
 ```
 
 Both bodies are the exact zlib-compressed repository stream and can be fed to a
-second `hydd` by pointing its `repository_url` at this instance. They are
+second `hydd` by pointing its `repository_url` at this instance. The official
+Hydrus client needs repository login and account endpoints that Hyd does not
+implement yet, so use another `hydd` (or wait for client support). They are
 read-only: uploads and petitions are never accepted.
 
 ## Error handling
@@ -293,6 +295,7 @@ hyd check                     # verify the store and derived counts
 ## See also
 
 - [api.md](api.md) - full endpoint reference
+- [compatibility.md](compatibility.md) - Hyd vs the Hydrus PTR, client, and Client API
 - `man hyd` - helper client
 - `man hydd` - daemon and options
 - `man hydd.conf` - configuration settings
