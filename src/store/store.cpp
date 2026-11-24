@@ -173,6 +173,7 @@ struct Store::Impl
     const std::uint8_t* postings_ids = nullptr;
     std::uint32_t postings_tag_count = 0;
     std::uint64_t postings_total = 0;
+    std::int64_t postings_built_at = 0;
 
     MappedFile hash_index;
     const std::uint8_t* hash_index_entries = nullptr;
@@ -618,6 +619,7 @@ bool Store::open(const std::filesystem::path& store_dir, std::string& error)
     impl_->postings_ids = nullptr;
     impl_->postings_tag_count = 0;
     impl_->postings_total = 0;
+    impl_->postings_built_at = 0;
 
     {
         const auto path = store_dir / "tag_postings.bin";
@@ -660,6 +662,8 @@ bool Store::open(const std::filesystem::path& store_dir, std::string& error)
                         + (static_cast<std::size_t>(tag_count) + 1) * 8;
                     impl_->postings_tag_count = tag_count;
                     impl_->postings_total = total;
+                    impl_->postings_built_at = static_cast<std::int64_t>(
+                        read_u64(impl_->postings.data() + 32));
                 }
             }
         }
@@ -877,6 +881,35 @@ std::int64_t Store::tag_counts_built_at() const
     return impl_->counts_built_at;
 }
 
+std::uint64_t Store::tag_counts_defined_tags() const
+{
+    return stored_tag_count();
+}
+
+std::uint64_t Store::tag_counts_size_bytes() const
+{
+    return impl_->counts.data() != nullptr ? impl_->counts.size() : 0;
+}
+
+std::int64_t Store::tag_hashes_built_at() const
+{
+    return impl_->postings_built_at;
+}
+
+std::uint64_t Store::tag_hashes_size_bytes() const
+{
+    std::uint64_t size = 0;
+    if (impl_->postings_offsets != nullptr)
+    {
+        size += impl_->postings.size();
+    }
+    if (impl_->hash_index_entries != nullptr)
+    {
+        size += impl_->hash_index.size();
+    }
+    return size;
+}
+
 std::optional<std::uint32_t> Store::resolve_tag_id(std::string_view tag) const
 {
     std::optional<std::uint32_t> tag_id;
@@ -961,59 +994,158 @@ bool Store::has_tag_hashes() const
         && impl_->postings_ids != nullptr && impl_->hash_index_entries != nullptr;
 }
 
-std::optional<TagHashesPage> Store::tag_hashes(std::string_view tag,
+std::optional<TagHashesPage> Store::tag_hashes(const TagHashesQuery& query,
     std::uint64_t offset, std::uint32_t limit, std::optional<std::uint32_t> after) const
 {
-    if (!has_tag_hashes())
+    if (!has_tag_hashes() || query.include.empty())
     {
         return std::nullopt;
     }
 
-    const auto tag_id = resolve_tag_id(tag);
-    if (!tag_id || *tag_id >= impl_->postings_tag_count)
+    struct Stream
     {
-        return std::nullopt;
-    }
+        std::size_t base_index = 0;
+        std::size_t base_end = 0;
+        std::vector<std::uint32_t> added;
+        std::size_t add_index = 0;
+        std::unordered_set<std::uint32_t> removed;
+        std::optional<std::uint32_t> head;
+    };
 
-    const std::uint64_t begin = read_u64(impl_->postings_offsets + static_cast<std::size_t>(*tag_id) * 8);
-    const std::uint64_t end = read_u64(
-        impl_->postings_offsets + (static_cast<std::size_t>(*tag_id) + 1) * 8);
-    if (begin > end || end > impl_->postings_total)
-    {
-        return std::nullopt;
-    }
+    const auto* ids = impl_->postings_ids;
 
-    const auto total = tag_count(tag);
-    if (!total)
-    {
-        return std::nullopt;
-    }
-
-    std::unordered_set<std::uint32_t> removed;
-    for (const auto key : delta_.mapping_deletions)
-    {
-        const auto hash_id = static_cast<std::uint32_t>(key >> 32);
-        const auto deleted_tag = static_cast<std::uint32_t>(key & 0xffffffffu);
-        if (deleted_tag == *tag_id && delta_.deleted_files.count(hash_id) == 0)
+    auto next_value = [&](Stream& stream) -> std::optional<std::uint32_t> {
+        while (true)
         {
-            removed.insert(hash_id);
-        }
-    }
+            std::optional<std::uint32_t> base_value;
+            std::optional<std::uint32_t> add_value;
+            if (stream.base_index < stream.base_end)
+            {
+                base_value = read_u32(ids + stream.base_index * 4);
+            }
+            if (stream.add_index < stream.added.size())
+            {
+                add_value = stream.added[stream.add_index];
+            }
 
-    std::vector<std::uint32_t> added;
-    for (const auto& [hash_id, tags] : delta_.mapping_additions)
-    {
-        if (delta_.deleted_files.count(hash_id) != 0 || removed.count(hash_id) != 0)
-        {
-            continue;
+            std::uint32_t value = 0;
+            if (base_value && (!add_value || *base_value < *add_value))
+            {
+                value = *base_value;
+                ++stream.base_index;
+            }
+            else if (add_value && (!base_value || *add_value < *base_value))
+            {
+                value = *add_value;
+                ++stream.add_index;
+            }
+            else if (base_value && add_value)
+            {
+                value = *base_value;
+                ++stream.base_index;
+                ++stream.add_index;
+            }
+            else
+            {
+                return std::nullopt;
+            }
+
+            if (delta_.deleted_files.count(value) != 0 || stream.removed.count(value) != 0)
+            {
+                continue;
+            }
+
+            return value;
         }
-        if (std::find(tags.begin(), tags.end(), *tag_id) != tags.end())
+    };
+
+    auto seek_ge = [&](Stream& stream, std::uint32_t target) {
+        if (stream.head && *stream.head >= target)
         {
-            added.push_back(hash_id);
+            return;
         }
-    }
-    std::sort(added.begin(), added.end());
-    added.erase(std::unique(added.begin(), added.end()), added.end());
+        std::size_t low = stream.base_index;
+        std::size_t high = stream.base_end;
+        while (low < high)
+        {
+            const std::size_t middle = low + (high - low) / 2;
+            if (read_u32(ids + middle * 4) < target)
+            {
+                low = middle + 1;
+            }
+            else
+            {
+                high = middle;
+            }
+        }
+        stream.base_index = low;
+        stream.add_index = static_cast<std::size_t>(
+            std::lower_bound(stream.added.begin() + static_cast<std::ptrdiff_t>(stream.add_index),
+                stream.added.end(), target)
+            - stream.added.begin());
+        stream.head = next_value(stream);
+    };
+
+    auto build_stream = [&](std::uint32_t tag_id,
+                            std::optional<std::uint32_t> start_after) -> Stream {
+        Stream stream;
+        const std::uint64_t begin = read_u64(
+            impl_->postings_offsets + static_cast<std::size_t>(tag_id) * 8);
+        const std::uint64_t end = read_u64(
+            impl_->postings_offsets + (static_cast<std::size_t>(tag_id) + 1) * 8);
+        stream.base_index = static_cast<std::size_t>(begin);
+        stream.base_end = static_cast<std::size_t>(end);
+
+        for (const auto key : delta_.mapping_deletions)
+        {
+            const auto hash_id = static_cast<std::uint32_t>(key >> 32);
+            const auto deleted_tag = static_cast<std::uint32_t>(key & 0xffffffffu);
+            if (deleted_tag == tag_id && delta_.deleted_files.count(hash_id) == 0)
+            {
+                stream.removed.insert(hash_id);
+            }
+        }
+
+        for (const auto& [hash_id, tags] : delta_.mapping_additions)
+        {
+            if (delta_.deleted_files.count(hash_id) != 0 || stream.removed.count(hash_id) != 0)
+            {
+                continue;
+            }
+            if (std::find(tags.begin(), tags.end(), tag_id) != tags.end())
+            {
+                stream.added.push_back(hash_id);
+            }
+        }
+        std::sort(stream.added.begin(), stream.added.end());
+        stream.added.erase(std::unique(stream.added.begin(), stream.added.end()),
+            stream.added.end());
+
+        if (start_after)
+        {
+            std::size_t low = stream.base_index;
+            std::size_t high = stream.base_end;
+            while (low < high)
+            {
+                const std::size_t middle = low + (high - low) / 2;
+                if (read_u32(ids + middle * 4) <= *start_after)
+                {
+                    low = middle + 1;
+                }
+                else
+                {
+                    high = middle;
+                }
+            }
+            stream.base_index = low;
+            stream.add_index = static_cast<std::size_t>(
+                std::upper_bound(stream.added.begin(), stream.added.end(), *start_after)
+                - stream.added.begin());
+        }
+
+        stream.head = next_value(stream);
+        return stream;
+    };
 
     auto resolve_hash = [this](std::uint32_t hash_id) -> std::optional<std::string> {
         if (static_cast<std::uint64_t>(hash_id) >= impl_->hash_index_count)
@@ -1035,7 +1167,8 @@ std::optional<TagHashesPage> Store::tag_hashes(std::string_view tag,
             {
                 return std::nullopt;
             }
-            LegacyHashEntry legacy = legacy_entry_at(impl_->legacy_entries, static_cast<std::size_t>(index));
+            LegacyHashEntry legacy = legacy_entry_at(
+                impl_->legacy_entries, static_cast<std::size_t>(index));
             return hex_encode(std::span<const std::uint8_t>(legacy.hash.data(), legacy.length));
         }
 
@@ -1048,112 +1181,159 @@ std::optional<TagHashesPage> Store::tag_hashes(std::string_view tag,
         {
             return std::nullopt;
         }
-        const auto* entry_bytes = files.hash_entries + static_cast<std::size_t>(index) * sizeof(HashEntry);
+        const auto* entry_bytes = files.hash_entries
+            + static_cast<std::size_t>(index) * sizeof(HashEntry);
         return hex_encode(std::span<const std::uint8_t>(entry_bytes, kHashSize));
     };
+
+    std::vector<Stream> positive;
+    positive.reserve(query.include.size());
+    for (const auto& tag : query.include)
+    {
+        const auto tag_id = resolve_tag_id(tag);
+        if (!tag_id || *tag_id >= impl_->postings_tag_count)
+        {
+            return std::nullopt;
+        }
+        positive.push_back(build_stream(*tag_id, after));
+    }
+
+    std::vector<Stream> negative;
+    negative.reserve(query.exclude.size());
+    for (const auto& tag : query.exclude)
+    {
+        const auto tag_id = resolve_tag_id(tag);
+        if (!tag_id || *tag_id >= impl_->postings_tag_count)
+        {
+            // Excluding a tag the repository has never defined is a no-op.
+            continue;
+        }
+        negative.push_back(build_stream(*tag_id, std::nullopt));
+    }
+
+    TagHashesPage result;
+    result.offset = offset;
+    result.total_known = query.include.size() == 1 && query.exclude.empty();
+    if (result.total_known)
+    {
+        const auto count = tag_count(query.include.front());
+        if (!count)
+        {
+            return std::nullopt;
+        }
+        result.total = *count;
+    }
 
     std::vector<std::string> page;
     page.reserve(std::min<std::uint64_t>(limit, 4096));
 
-    std::size_t base_index = static_cast<std::size_t>(begin);
-    std::size_t add_index = 0;
-
-    if (after)
-    {
-        // Base postings are sorted by hash id, so a cursor page starts at the
-        // first larger id instead of walking from the beginning.
-        std::size_t low = static_cast<std::size_t>(begin);
-        std::size_t high = static_cast<std::size_t>(end);
-        while (low < high)
-        {
-            const std::size_t middle = low + (high - low) / 2;
-            if (read_u32(impl_->postings_ids + middle * 4) <= *after)
-            {
-                low = middle + 1;
-            }
-            else
-            {
-                high = middle;
-            }
-        }
-        base_index = low;
-        add_index = static_cast<std::size_t>(
-            std::upper_bound(added.begin(), added.end(), *after) - added.begin());
-    }
-
-    std::uint64_t seen = 0;
+    std::uint64_t skipped = 0;
     bool has_more = false;
     std::optional<std::uint32_t> last_value;
 
-    auto next_base = [&]() -> std::optional<std::uint32_t> {
-        while (base_index < end)
+    while (true)
+    {
+        for (const auto& stream : positive)
         {
-            const auto hash_id = read_u32(impl_->postings_ids + base_index * 4);
-            ++base_index;
-            if (delta_.deleted_files.count(hash_id) != 0 || removed.count(hash_id) != 0)
+            if (!stream.head)
             {
-                continue;
+                goto finished;
             }
-            return hash_id;
         }
-        return std::nullopt;
-    };
 
-    auto base_value = next_base();
-    std::optional<std::uint32_t> add_value;
-    if (add_index < added.size())
-    {
-        add_value = added[add_index++];
+        // Leapfrog: bring every stream to the largest current head.
+        while (true)
+        {
+            std::uint32_t candidate = 0;
+            bool first = true;
+            for (const auto& stream : positive)
+            {
+                if (!stream.head)
+                {
+                    goto finished;
+                }
+                if (first || *stream.head > candidate)
+                {
+                    candidate = *stream.head;
+                    first = false;
+                }
+            }
+
+            bool advanced = false;
+            for (auto& stream : positive)
+            {
+                if (*stream.head < candidate)
+                {
+                    seek_ge(stream, candidate);
+                    if (!stream.head)
+                    {
+                        goto finished;
+                    }
+                    advanced = true;
+                }
+            }
+
+            if (!advanced)
+            {
+                bool all_equal = true;
+                for (const auto& stream : positive)
+                {
+                    if (*stream.head != candidate)
+                    {
+                        all_equal = false;
+                        break;
+                    }
+                }
+                if (all_equal)
+                {
+                    bool excluded = false;
+                    for (auto& stream : negative)
+                    {
+                        seek_ge(stream, candidate);
+                        if (stream.head && *stream.head == candidate)
+                        {
+                            excluded = true;
+                            break;
+                        }
+                    }
+
+                    if (!excluded)
+                    {
+                        if (skipped < offset)
+                        {
+                            ++skipped;
+                        }
+                        else if (page.size() >= limit)
+                        {
+                            has_more = true;
+                            goto finished;
+                        }
+                        else
+                        {
+                            const auto hash = resolve_hash(candidate);
+                            if (!hash)
+                            {
+                                return std::nullopt;
+                            }
+                            page.push_back(*hash);
+                            last_value = candidate;
+                        }
+                    }
+                }
+
+                for (auto& stream : positive)
+                {
+                    stream.head = next_value(stream);
+                    if (!stream.head)
+                    {
+                        goto finished;
+                    }
+                }
+            }
+        }
     }
 
-    while (base_value || add_value)
-    {
-        std::uint32_t value = 0;
-        if (base_value && (!add_value || *base_value < *add_value))
-        {
-            value = *base_value;
-            base_value = next_base();
-        }
-        else if (add_value && (!base_value || *add_value < *base_value))
-        {
-            value = *add_value;
-            add_value = add_index < added.size()
-                ? std::optional<std::uint32_t>(added[add_index++])
-                : std::nullopt;
-        }
-        else
-        {
-            value = *base_value;
-            base_value = next_base();
-            add_value = add_index < added.size()
-                ? std::optional<std::uint32_t>(added[add_index++])
-                : std::nullopt;
-        }
-
-        if (seen < offset)
-        {
-            ++seen;
-            continue;
-        }
-        if (page.size() >= limit)
-        {
-            has_more = true;
-            break;
-        }
-
-        const auto hash = resolve_hash(value);
-        if (!hash)
-        {
-            return std::nullopt;
-        }
-        page.push_back(*hash);
-        last_value = value;
-        ++seen;
-    }
-
-    TagHashesPage result;
-    result.total = *total;
-    result.offset = offset;
+finished:
     result.has_more = has_more;
     result.next_offset = offset + page.size();
     if (has_more && last_value)

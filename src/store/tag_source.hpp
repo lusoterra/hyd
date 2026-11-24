@@ -26,7 +26,16 @@ struct TagHashesPage
     bool has_more = false;
     std::uint64_t next_offset = 0;
     std::optional<std::uint32_t> next_after;
+    // True when `total` is exact. Multi-tag intersections do not compute a
+    // total unless it is the cheap single-tag case.
+    bool total_known = true;
     std::vector<std::string> hashes;
+};
+
+struct TagHashesQuery
+{
+    std::vector<std::string> include; // AND
+    std::vector<std::string> exclude; // AND NOT
 };
 
 // Common read-only interface for the custom store.
@@ -62,15 +71,19 @@ public:
     }
     virtual bool has_tag_counts() const { return false; }
     virtual std::int64_t tag_counts_built_at() const { return 0; }
+    virtual std::uint64_t tag_counts_defined_tags() const { return 0; }
+    virtual std::uint64_t tag_counts_size_bytes() const { return 0; }
 
     // Reverse lookup (tag -> hashes). Off by default because the postings
     // index is roughly one u32 per mapping plus a hash-id map.
     virtual bool has_tag_hashes() const { return false; }
-    virtual std::optional<TagHashesPage> tag_hashes(std::string_view tag,
+    virtual std::int64_t tag_hashes_built_at() const { return 0; }
+    virtual std::uint64_t tag_hashes_size_bytes() const { return 0; }
+    virtual std::optional<TagHashesPage> tag_hashes(const TagHashesQuery& query,
         std::uint64_t offset, std::uint32_t limit,
         std::optional<std::uint32_t> after = std::nullopt) const
     {
-        (void)tag;
+        (void)query;
         (void)offset;
         (void)limit;
         (void)after;

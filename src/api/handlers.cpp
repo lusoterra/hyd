@@ -1071,14 +1071,41 @@ ApiResponse ApiHandlers::handle_tag_hashes(const ApiRequest& request, const nloh
             "hydd is still building its reverse tag index; try again later.");
     }
 
-    const auto tag = json_param_string(params, "tag");
-    if (!tag || tag->empty())
+    bool malformed = false;
+    auto entries = tags_from_params(params, malformed);
+    if (malformed)
     {
-        return text_response(400, "You have to specify a tag to look up.");
+        return text_response(400, "tags must be a string or a list of strings.");
     }
-    if (tag->size() > 4096)
+    if (entries.empty())
     {
-        return text_response(400, "tag is too long.");
+        return text_response(400, "You have to specify at least one tag to look up.");
+    }
+    if (entries.size() > 16)
+    {
+        return text_response(400, "too many tags in one reverse lookup (max 16).");
+    }
+
+    TagHashesQuery query;
+    for (const auto& entry : entries)
+    {
+        if (entry.size() > 4096)
+        {
+            return text_response(400, "tag is too long.");
+        }
+        if (entry.front() == '-' && entry.size() > 1)
+        {
+            query.exclude.push_back(entry.substr(1));
+        }
+        else
+        {
+            query.include.push_back(entry);
+        }
+    }
+    if (query.include.empty())
+    {
+        return text_response(400,
+            "at least one positive tag is required; exclusion-only queries are not supported.");
     }
 
     std::int64_t offset = 0;
@@ -1125,11 +1152,11 @@ ApiResponse ApiHandlers::handle_tag_hashes(const ApiRequest& request, const nloh
         after = static_cast<std::uint32_t>(after_value);
     }
 
-    const auto page = store->tag_hashes(*tag, static_cast<std::uint64_t>(offset),
+    const auto page = store->tag_hashes(query, static_cast<std::uint64_t>(offset),
         static_cast<std::uint32_t>(limit), after);
     if (!page)
     {
-        return text_response(404, "that tag is not defined in this mirror.");
+        return text_response(404, "one of the tags is not defined in this mirror.");
     }
 
     nlohmann::json hashes = nlohmann::json::array();
@@ -1139,10 +1166,11 @@ ApiResponse ApiHandlers::handle_tag_hashes(const ApiRequest& request, const nloh
     }
 
     nlohmann::json body;
-    body["tag"] = *tag;
+    body["tags"] = query.include;
+    body["excluded"] = query.exclude;
     body["offset"] = page->offset;
     body["limit"] = limit;
-    body["total"] = page->total;
+    body["total"] = page->total_known ? nlohmann::json(page->total) : nlohmann::json(nullptr);
     body["hashes"] = std::move(hashes);
     body["next_offset"] = page->has_more ? nlohmann::json(page->next_offset) : nlohmann::json(nullptr);
     body["next_after"] = page->next_after
@@ -1501,6 +1529,26 @@ nlohmann::json ApiHandlers::health_json() const
             body["delta_hashes"] = store->delta_hash_count();
             body["backend"] = store->backend_name();
         }
+
+        nlohmann::json features = nlohmann::json::object();
+        features["seeding"] = {
+            { "enabled", config_.get_bool("keep_update_cache", false) },
+        };
+        features["tag_counts"] = {
+            { "enabled", config_.get_bool("tag_counts_enabled", true) },
+            { "ready", store && store->has_tag_counts() },
+            { "defined_tags", store ? store->tag_counts_defined_tags() : 0 },
+            { "bytes", store ? store->tag_counts_size_bytes() : 0 },
+            { "as_of", store ? store->tag_counts_built_at() : 0 },
+        };
+        features["tag_hashes"] = {
+            { "enabled", config_.get_bool("tag_hashes_enabled", false) },
+            { "ready", store && store->has_tag_hashes() },
+            { "bytes", store ? store->tag_hashes_size_bytes() : 0 },
+            { "as_of", store ? store->tag_hashes_built_at() : 0 },
+        };
+        body["features"] = std::move(features);
+
         return body;
 }
 

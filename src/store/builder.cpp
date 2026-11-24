@@ -2958,9 +2958,10 @@ bool rebuild_tag_metadata(const Config& config, const SyncCallbacks& callbacks, 
         }
     }
 
-    HYD_LOGF(info, "rebuilding tag metadata: scanning %zu partitions for %u tag ids",
-        partitions, max_tag_id + 1);
+    HYD_LOGF(info, "rebuilding tag metadata: counting %u tags across %zu partitions",
+        max_tag_id + 1, partitions);
 
+    const auto started = std::chrono::steady_clock::now();
     std::vector<std::uint32_t> tag_counts(static_cast<std::size_t>(max_tag_id) + 1, 0);
     for (std::size_t p = 0; p < partitions; ++p)
     {
@@ -2975,20 +2976,30 @@ bool rebuild_tag_metadata(const Config& config, const SyncCallbacks& callbacks, 
         {
             return false;
         }
-        HYD_LOGF(debug, "tag metadata: partition %zu/%zu scanned", p + 1, partitions);
+        const auto elapsed = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - started).count();
+        HYD_LOGF(info, "tag counts: partition %zu/%zu scanned (%.0f%%, %.1fs elapsed)",
+            p + 1, partitions, 100.0 * static_cast<double>(p + 1)
+                / static_cast<double>(partitions), elapsed);
     }
 
+    HYD_LOGF(info, "tag counts: writing %zu entries (%s)",
+        tag_counts.size(), human_bytes(tag_counts.size() * 4).c_str());
     if (!write_tag_counts(store_dir / "counts.bin", tag_counts, manifest.generation, now_unix(), error))
     {
         return false;
     }
 
+    HYD_LOGF(info, "tag names: indexing %llu tag definitions from %zu segments",
+        static_cast<unsigned long long>(manifest.tag_count), manifest.tag_segments.size());
     std::vector<std::pair<std::uint32_t, std::uint32_t>> lookup;
     if (!collect_tag_lookup(store_dir, manifest, std::unordered_map<std::uint32_t, std::string> {},
             lookup, error))
     {
         return false;
     }
+    HYD_LOGF(info, "tag names: writing %zu entries (%s)", lookup.size(),
+        human_bytes(lookup.size() * 8).c_str());
     if (!write_tag_lookup(store_dir / "tag_lookup.bin", lookup, manifest.generation, error))
     {
         return false;
@@ -3254,8 +3265,10 @@ bool rebuild_tag_postings(const Config& config, const SyncCallbacks& callbacks, 
     const std::uint64_t postings_bytes = total * 4;
     const std::uint64_t file_size = kTagPostingsHeader + offsets_bytes + postings_bytes;
 
-    HYD_LOGF(info, "building tag postings: %llu mappings across %u tags (%s)",
+    HYD_LOGF(info, "tag postings: %llu mappings across %u tags (%s), starting fill",
         static_cast<unsigned long long>(total), tag_count, human_bytes(file_size).c_str());
+
+    const auto fill_started = std::chrono::steady_clock::now();
 
     const auto final_path = store_dir / "tag_postings.bin";
     const auto temporary = final_path.string() + ".tmp."
@@ -3391,7 +3404,10 @@ bool rebuild_tag_postings(const Config& config, const SyncCallbacks& callbacks, 
             }
         }
 
-        HYD_LOGF(debug, "tag postings: partition %zu/%zu filled", p + 1, partitions);
+        HYD_LOGF(info, "tag postings: partition %zu/%zu filled (%.0f%%, %.1fs elapsed)",
+            p + 1, partitions, 100.0 * static_cast<double>(p + 1)
+                / static_cast<double>(partitions),
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - fill_started).count());
     }
 
     for (std::size_t i = 0; i < tag_count; ++i)
@@ -3406,6 +3422,8 @@ bool rebuild_tag_postings(const Config& config, const SyncCallbacks& callbacks, 
     }
 
     HYD_LOG(info, "tag postings: sorting per-tag hash id ranges");
+    const auto sort_started = std::chrono::steady_clock::now();
+    std::size_t next_sort_report = tag_count > 10 ? tag_count / 10 : 0;
     for (std::size_t i = 0; i < tag_count; ++i)
     {
         if (stopped(callbacks))
@@ -3419,7 +3437,18 @@ bool rebuild_tag_postings(const Config& config, const SyncCallbacks& callbacks, 
         {
             std::sort(postings + offsets[i], postings + offsets[i + 1]);
         }
+        if (next_sort_report > 0 && i + 1 >= next_sort_report)
+        {
+            HYD_LOGF(info, "tag postings: sorted %zu/%u tags (%.0f%%, %.1fs elapsed)",
+                i + 1, tag_count, 100.0 * static_cast<double>(i + 1)
+                    / static_cast<double>(tag_count),
+                std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - sort_started).count());
+            next_sort_report += tag_count > 10 ? tag_count / 10 : 0;
+        }
     }
+    HYD_LOGF(info, "tag postings: sort complete (%.1fs)",
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - sort_started).count());
 
     if (::msync(mapped, static_cast<std::size_t>(file_size), MS_SYNC) != 0)
     {
@@ -3456,6 +3485,8 @@ bool rebuild_tag_postings(const Config& config, const SyncCallbacks& callbacks, 
     }
 
     // hash id -> (partition, entry) so a page of postings can become hashes.
+    HYD_LOGF(info, "hash id index: scanning %zu partitions", partitions);
+    const auto index_started = std::chrono::steady_clock::now();
     std::vector<std::uint64_t> hash_index;
 
     for (std::size_t p = 0; p < partitions; ++p)
@@ -3494,7 +3525,11 @@ bool rebuild_tag_postings(const Config& config, const SyncCallbacks& callbacks, 
             hash_index[hash_id] = (static_cast<std::uint64_t>(p) << 32)
                 | (static_cast<std::uint64_t>(i) + 1);
         }
-        HYD_LOGF(debug, "hash id index: partition %zu/%zu scanned", p + 1, partitions);
+        HYD_LOGF(info, "hash id index: partition %zu/%zu scanned (%.0f%%, %.1fs elapsed)",
+            p + 1, partitions, 100.0 * static_cast<double>(p + 1)
+                / static_cast<double>(partitions),
+            std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - index_started).count());
     }
 
     // Legacy SHA-1/MD5 entries live outside the partitions; use a sentinel
@@ -3549,14 +3584,17 @@ bool rebuild_tag_postings(const Config& config, const SyncCallbacks& callbacks, 
         return false;
     }
 
-    HYD_LOGF(info, "tag postings ready: %llu mappings (%s), %llu hash ids (%s)",
+    HYD_LOGF(info, "tag postings ready: %llu mappings (%s), %llu hash ids (%s), %.1fs total",
         static_cast<unsigned long long>(total), human_bytes(postings_bytes).c_str(),
-        static_cast<unsigned long long>(index_count), human_bytes(index_size).c_str());
+        static_cast<unsigned long long>(index_count), human_bytes(index_size).c_str(),
+        std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - fill_started).count());
 
     return true;
 }
 
-bool compact_store(const Config& config, const SyncCallbacks& callbacks, SyncState& state, std::string& error){
+bool compact_store(const Config& config, const SyncCallbacks& callbacks, SyncState& state, std::string& error)
+{
     const auto store_dir = config.store_dir();
     const auto state_dir = config.state_dir();
     const auto partitions = static_cast<std::size_t>(config.partitions());

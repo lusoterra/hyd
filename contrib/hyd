@@ -5,7 +5,8 @@
 #   hyd HASH                           query a SHA-256, SHA-1, or MD5 hash
 #   hyd stats|scan|repair|verify|version
 #   hyd counts TAG...                  mapping count per tag from the running API
-#   hyd hashes TAG [OFFSET] [LIMIT]    paged SHA-256 list for one tag (reverse index)
+#   hyd hashes [--offset N] [--limit N] [--after ID] TAG...
+#                                      paged SHA-256 list (tags are ANDed; -tag excludes)
 #   hyd hashes-after TAG ID [LIMIT]    continue after a next_after hash id
 #   hyd rebuild-counts                 rebuild counts.bin and tag_lookup.bin
 #   hyd check                          verify the store and the derived counts
@@ -23,7 +24,7 @@ usage()
 usage: hyd [--sha256|--sha1|--md5] FILE|HASH
        hyd stats
        hyd counts TAG...
-       hyd hashes TAG [OFFSET] [LIMIT]
+       hyd hashes [--offset N] [--limit N] [--after ID] TAG...
        hyd hashes-after TAG ID [LIMIT]
        hyd rebuild-counts
        hyd check
@@ -36,6 +37,8 @@ Arguments:
   FILE       Hash the file (SHA-256 by default) and query it.
   HASH       Query a 64-character SHA-256, 40-character SHA-1, or
              32-character MD5 hash directly.
+  TAG...     One or more storage tags. For `hyd hashes`, multiple tags
+             are ANDed and a leading '-' excludes (quote tags with spaces).
 
 Options:
   --sha256   Hash FILE with SHA-256 (default).
@@ -197,16 +200,43 @@ cmd_rebuild_counts()
 cmd_hashes()
 {
     require_bin
+    offset=0
+    limit=100
+    after=
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --offset)
+                [ "$#" -ge 2 ] || fail "--offset needs a value"
+                offset=$2
+                shift 2
+                ;;
+            --limit)
+                [ "$#" -ge 2 ] || fail "--limit needs a value"
+                limit=$2
+                shift 2
+                ;;
+            --after)
+                [ "$#" -ge 2 ] || fail "--after needs a value"
+                after=$2
+                shift 2
+                ;;
+            --)
+                shift
+                break
+                ;;
+            *)
+                break
+                ;;
+        esac
+    done
     [ "$#" -gt 0 ] || fail "no tag given"
-    tag=$1
-    shift
-    offset=${1:-0}
-    [ "$#" -eq 0 ] || shift
-    limit=${1:-100}
-    [ "$#" -eq 0 ] || shift
-    [ "$#" -eq 0 ] || fail "usage: hyd hashes TAG [OFFSET] [LIMIT]"
-    "$HYD_BIN" -c "$HYD_CONFIG" --tag-hashes "$tag" \
-        --hash-offset "$offset" --hash-limit "$limit"
+    if [ -n "$after" ]; then
+        "$HYD_BIN" -c "$HYD_CONFIG" --tag-hashes \
+            --hash-after "$after" --hash-limit "$limit" -- "$@"
+    else
+        "$HYD_BIN" -c "$HYD_CONFIG" --tag-hashes \
+            --hash-offset "$offset" --hash-limit "$limit" -- "$@"
+    fi
 }
 
 cmd_hashes_after()
@@ -221,8 +251,8 @@ cmd_hashes_after()
     limit=${1:-100}
     [ "$#" -eq 0 ] || shift
     [ "$#" -eq 0 ] || fail "usage: hyd hashes-after TAG ID [LIMIT]"
-    "$HYD_BIN" -c "$HYD_CONFIG" --tag-hashes "$tag" \
-        --hash-after "$after" --hash-limit "$limit"
+    "$HYD_BIN" -c "$HYD_CONFIG" --tag-hashes \
+        --hash-after "$after" --hash-limit "$limit" -- "$tag"
 }
 
 cmd_check()

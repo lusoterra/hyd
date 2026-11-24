@@ -508,6 +508,55 @@ std::string render_stats(const nlohmann::json& health, const nlohmann::json* api
         add_row(out, "Delta", value);
     }
 
+    if (const auto features = health.find("features");
+        features != health.end() && features->is_object())
+    {
+        out << "\n";
+        auto add_feature = [&](const char* label, const char* key, bool show_ready,
+                               bool show_tags) {
+            const auto iterator = features->find(key);
+            if (iterator == features->end() || !iterator->is_object())
+            {
+                return;
+            }
+
+            const bool enabled = iterator->value("enabled", false);
+            std::string value = enabled ? "enabled" : "disabled";
+            if (enabled && show_ready)
+            {
+                const bool ready = iterator->value("ready", false);
+                value += ready ? ", ready" : ", building";
+                if (ready)
+                {
+                    if (const auto as_of = iterator->value("as_of", static_cast<std::int64_t>(0));
+                        as_of > 0)
+                    {
+                        value += " (built " + utc_time(as_of) + ")";
+                    }
+                    if (const auto bytes = iterator->value("bytes", static_cast<std::uint64_t>(0));
+                        bytes > 0)
+                    {
+                        value += ", " + format_bytes(bytes);
+                    }
+                    if (show_tags)
+                    {
+                        if (const auto tags = iterator->value(
+                                "defined_tags", static_cast<std::uint64_t>(0));
+                            tags > 0)
+                        {
+                            value += ", " + commas(tags) + " tags";
+                        }
+                    }
+                }
+            }
+            add_row(out, label, value);
+        };
+
+        add_feature("Seeding", "seeding", false, false);
+        add_feature("Tag counts", "tag_counts", true, true);
+        add_feature("Reverse lookup", "tag_hashes", true, false);
+    }
+
     if (!built)
     {
         if (build_active)
@@ -908,12 +957,17 @@ int run_tag_counts(const Config& config, const std::vector<std::string>& tags)
     return exit_code;
 }
 
-int run_tag_hashes(const Config& config, std::string_view tag,
+int run_tag_hashes(const Config& config, const std::vector<std::string>& tags,
     std::int64_t offset, std::int64_t limit, std::optional<std::int64_t> after)
 {
-    if (tag.empty())
+    if (tags.empty())
     {
-        std::cerr << "hydd: --tag-hashes needs a tag\n";
+        std::cerr << "hydd: --tag-hashes needs at least one tag\n";
+        return 2;
+    }
+    if (tags.size() > 16)
+    {
+        std::cerr << "hydd: at most 16 tags per --tag-hashes call\n";
         return 2;
     }
     if (offset < 0 || limit < 1 || limit > 1000)
@@ -927,9 +981,15 @@ int run_tag_hashes(const Config& config, std::string_view tag,
         return 2;
     }
 
+    nlohmann::json requested = nlohmann::json::array();
+    for (const auto& tag : tags)
+    {
+        requested.push_back(tag);
+    }
+
     const std::string api_url = local_api_url(config);
     const auto keys = local_api_keys(config);
-    std::string path = "/hydd/tag_hashes?tag=" + percent_encode(tag)
+    std::string path = "/hydd/tag_hashes?tags=" + percent_encode(requested.dump())
         + "&limit=" + std::to_string(limit);
     if (after)
     {
@@ -997,20 +1057,33 @@ int run_tag_hashes(const Config& config, std::string_view tag,
                 }
             }
 
-            const auto total = document.value("total", std::uint64_t { 0 });
+            const bool total_known = document.contains("total")
+                && document.at("total").is_number();
+            const auto total = total_known
+                ? document.at("total").get<std::uint64_t>()
+                : 0;
             if (document.contains("next_after") && document.at("next_after").is_number())
             {
-                std::cerr << "total " << total << ", next after "
+                std::cerr << (total_known ? "total " + std::to_string(total) + ", " : "")
+                          << "next after "
                           << document.at("next_after").get<std::uint64_t>() << "\n";
             }
             else if (document.contains("next_offset") && document.at("next_offset").is_number())
             {
-                std::cerr << "total " << total << ", next offset "
+                std::cerr << (total_known ? "total " + std::to_string(total) + ", " : "")
+                          << "next offset "
                           << document.at("next_offset").get<std::uint64_t>() << "\n";
             }
             else
             {
-                std::cerr << "total " << total << ", end of results\n";
+                if (total_known)
+                {
+                    std::cerr << "total " << total << ", end of results\n";
+                }
+                else
+                {
+                    std::cerr << "end of results\n";
+                }
             }
         }
     }

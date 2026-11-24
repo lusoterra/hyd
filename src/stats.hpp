@@ -31,7 +31,7 @@ int run_tag_counts(const Config& config, const std::vector<std::string>& tags);
 
 // Queries /hydd/tag_hashes and prints one hash per line. Offset/limit select a
 // page; progress (total/next) goes to stderr so stdout stays pipeable.
-int run_tag_hashes(const Config& config, std::string_view tag,
+int run_tag_hashes(const Config& config, const std::vector<std::string>& tags,
     std::int64_t offset, std::int64_t limit,
     std::optional<std::int64_t> after = std::nullopt);
 

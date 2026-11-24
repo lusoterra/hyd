@@ -66,7 +66,8 @@ struct Options
     bool rebuild_tag_counts = false;
     bool check_tag_counts = false;
     std::vector<std::string> tag_count_tags;
-    std::optional<std::string> tag_hashes_tag;
+    bool tag_hashes_query = false;
+    std::vector<std::string> tag_hashes_tags;
     std::int64_t tag_hashes_offset = 0;
     std::int64_t tag_hashes_limit = 100;
     std::optional<std::int64_t> tag_hashes_after;
@@ -98,7 +99,8 @@ void print_help()
         "      --rebuild-tag-counts   Rebuild the derived tag counts and tag name index and exit\n"
         "      --check-tag-counts     Verify the derived tag counts and tag name index and exit\n"
         "      --tag-counts TAG       Query the running API for mapping counts (repeatable)\n"
-        "      --tag-hashes TAG       Query the running API for the hashes of one tag\n"
+        "      --tag-hashes TAG...    Query the running API for hashes matching tags\n"
+        "                             (use -- before tags that start with '-') \n"
         "      --hash-offset N        Page offset for --tag-hashes (default 0)\n"
         "      --hash-after ID        Continue after a hash id returned as next_after\n"
         "      --hash-limit N         Page size for --tag-hashes (1-1000, default 100)\n"
@@ -134,7 +136,7 @@ std::optional<Options> parse_options(int argc, char** argv, std::string& error)
         { "rebuild-tag-counts", no_argument, nullptr, 1011 },
         { "check-tag-counts", no_argument, nullptr, 1012 },
         { "tag-counts", required_argument, nullptr, 1013 },
-        { "tag-hashes", required_argument, nullptr, 1014 },
+        { "tag-hashes", no_argument, nullptr, 1014 },
         { "hash-offset", required_argument, nullptr, 1015 },
         { "hash-after", required_argument, nullptr, 1017 },
         { "hash-limit", required_argument, nullptr, 1016 },
@@ -219,7 +221,7 @@ std::optional<Options> parse_options(int argc, char** argv, std::string& error)
                 options.tag_count_tags.emplace_back(optarg);
                 break;
             case 1014:
-                options.tag_hashes_tag = std::string(optarg);
+                options.tag_hashes_query = true;
                 break;
             case 1015:
             {
@@ -264,6 +266,16 @@ std::optional<Options> parse_options(int argc, char** argv, std::string& error)
                 error = "invalid option; use --help";
                 return std::nullopt;
         }
+    }
+
+    for (int i = optind; i < argc; ++i)
+    {
+        if (!options.tag_hashes_query)
+        {
+            error = "unexpected argument: " + std::string(argv[i]);
+            return std::nullopt;
+        }
+        options.tag_hashes_tags.emplace_back(argv[i]);
     }
 
     return options;
@@ -638,9 +650,14 @@ int main(int argc, char** argv)
         return hyd::run_tag_counts(runtime.config, options->tag_count_tags);
     }
 
-    if (options->tag_hashes_tag)
+    if (options->tag_hashes_query)
     {
-        return hyd::run_tag_hashes(runtime.config, *options->tag_hashes_tag,
+        if (options->tag_hashes_tags.empty())
+        {
+            std::cerr << "hydd: --tag-hashes needs at least one tag\n";
+            return 2;
+        }
+        return hyd::run_tag_hashes(runtime.config, options->tag_hashes_tags,
             options->tag_hashes_offset, options->tag_hashes_limit,
             options->tag_hashes_after);
     }

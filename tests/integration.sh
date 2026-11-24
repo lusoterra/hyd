@@ -138,6 +138,20 @@ echo "${STATS}" | grep -q 'ready'
 curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" "http://127.0.0.1:${PORT_API}/hydd/stats" | grep -q '"built":true'
 curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" "http://127.0.0.1:${PORT_API}/hydd/stats" | grep -q '"phase":"idle"'
 curl -s "http://127.0.0.1:${PORT_API}/hydd/health" | grep -q '"built":true'
+# Feature status is in the stats payload and the human stats page.
+curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    "http://127.0.0.1:${PORT_API}/hydd/stats" > "${WORK}/stats.json"
+python3 - "${WORK}/stats.json" <<'PY'
+import json, sys
+f = json.load(open(sys.argv[1]))["features"]
+assert f["tag_counts"]["enabled"] is True and f["tag_counts"]["ready"] is True
+assert f["tag_hashes"]["enabled"] is False and f["tag_hashes"]["ready"] is False
+assert f["seeding"]["enabled"] is True
+PY
+STATS_TEXT=$("${BIN}" -c "${WORK}/hydd.conf" --stats)
+printf '%s\n' "${STATS_TEXT}" | grep -q 'Tag counts'
+printf '%s\n' "${STATS_TEXT}" | grep -q 'Reverse lookup'
+printf '%s\n' "${STATS_TEXT}" | grep -q 'Seeding'
 # The pre-0.8 top-level extension paths are gone.
 [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT_API}/stats")" = "404" ]
 [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT_API}/health")" = "404" ]
@@ -386,6 +400,16 @@ for _ in $(seq 1 100); do
 done
 [ "${HASH_READY}" = "1" ]
 
+# The stats features report the enabled reverse index as ready.
+curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    "${RBASE}/hydd/stats" > "${WORK}/reverse-stats.json"
+python3 - "${WORK}/reverse-stats.json" <<'PY'
+import json, sys
+f = json.load(open(sys.argv[1]))["features"]
+assert f["tag_hashes"]["enabled"] is True and f["tag_hashes"]["ready"] is True
+assert f["tag_hashes"]["bytes"] > 0 and f["tag_hashes"]["as_of"] > 0
+assert f["tag_counts"]["ready"] is True
+PY
 [ "$(curl -s -o /dev/null -w '%{http_code}' \
     "${RBASE}/hydd/tag_hashes?tag=series:alpha")" = "401" ]
 
@@ -450,11 +474,74 @@ done
     "${RBASE}/hydd/tag_hashes?tag=no:such-tag")" = "404" ]
 
 HELPER_HASHES=$(HYD_BIN="${BIN}" HYD_CONFIG="${WORK}/reverse.conf" \
-    "${ROOT}/contrib/hyd" hashes "series:alpha" 0 1 2>/dev/null)
+    "${ROOT}/contrib/hyd" hashes --limit 1 -- "series:alpha" 2>/dev/null)
 printf '%s\n' "${HELPER_HASHES}" | grep -q "${H1}"
 HELPER_AFTER=$(HYD_BIN="${BIN}" HYD_CONFIG="${WORK}/reverse.conf" \
     "${ROOT}/contrib/hyd" hashes-after "series:alpha" 10 1 2>/dev/null)
 printf '%s\n' "${HELPER_AFTER}" | grep -q "${L1}"
+
+# Multiple tags are ANDed; a leading '-' excludes. total is null when the
+# intersection size is not cheaply known.
+AND_PAGE=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    -H 'Content-Type: application/json' \
+    -d '{"tags":["series:alpha","character:beta"]}' \
+    "${RBASE}/hydd/tag_hashes?limit=10")
+echo "${AND_PAGE}" | grep -q "${H1}"
+echo "${AND_PAGE}" | grep -q '"total":null'
+if echo "${AND_PAGE}" | grep -q "${L1}"; then
+    echo "AND returned a hash that does not match both tags" >&2
+    exit 1
+fi
+
+NOT_PAGE=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    -H 'Content-Type: application/json' \
+    -d '{"tags":["series:alpha","-character:beta"]}' \
+    "${RBASE}/hydd/tag_hashes?limit=10")
+echo "${NOT_PAGE}" | grep -q "${L1}"
+if echo "${NOT_PAGE}" | grep -q "${H1}"; then
+    echo "negated tag was not excluded" >&2
+    exit 1
+fi
+
+EMPTY_AND=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    -H 'Content-Type: application/json' \
+    -d '{"tags":["character:beta","creator:gamma"]}' \
+    "${RBASE}/hydd/tag_hashes?limit=10")
+echo "${EMPTY_AND}" | grep -q '"hashes":\[\]'
+
+DELTA_AND=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    -H 'Content-Type: application/json' \
+    -d '{"tags":["character:delta","creator:gamma"]}' \
+    "${RBASE}/hydd/tag_hashes?limit=10")
+echo "${DELTA_AND}" | grep -q "${H3}"
+
+# Excluding a tag that does not exist is a no-op; exclusion-only is refused.
+NOOP_NOT=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    -H 'Content-Type: application/json' \
+    -d '{"tags":["series:alpha","-no:such-tag"]}' \
+    "${RBASE}/hydd/tag_hashes?limit=10")
+echo "${NOOP_NOT}" | grep -q "${H1}"
+echo "${NOOP_NOT}" | grep -q "${L1}"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    -H 'Content-Type: application/json' -d '{"tags":["-character:beta"]}' \
+    "${RBASE}/hydd/tag_hashes")" = "400" ]
+python3 - "${WORK}/too-many-tags.json" <<'PY'
+import json, sys
+json.dump({"tags": [f"test:t{i}" for i in range(17)]}, open(sys.argv[1], "w"))
+PY
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    -H 'Content-Type: application/json' --data-binary "@${WORK}/too-many-tags.json" \
+    "${RBASE}/hydd/tag_hashes")" = "400" ]
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    -H 'Content-Type: application/json' -d '{"tags":["no:such-tag","character:beta"]}' \
+    "${RBASE}/hydd/tag_hashes")" = "404" ]
+
+HELPER_AND=$(HYD_BIN="${BIN}" HYD_CONFIG="${WORK}/reverse.conf" \
+    "${ROOT}/contrib/hyd" hashes --limit 10 -- "series:alpha" "character:beta" 2>/dev/null)
+printf '%s\n' "${HELPER_AND}" | grep -q "${H1}"
+HELPER_NOT=$(HYD_BIN="${BIN}" HYD_CONFIG="${WORK}/reverse.conf" \
+    "${ROOT}/contrib/hyd" hashes -- "series:alpha" "-character:beta" 2>/dev/null)
+printf '%s\n' "${HELPER_NOT}" | grep -q "${L1}"
 
 kill "${DAEMON_PID}" 2>/dev/null || true
 wait "${DAEMON_PID}" 2>/dev/null || true
