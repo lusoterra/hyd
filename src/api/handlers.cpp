@@ -651,7 +651,11 @@ ApiResponse ApiHandlers::route(const ApiRequest& request)
     if (path == "/" || path.empty())
     {
         return text_response(200,
-            "<html><body><h1>hydd</h1><p>read-only Hydrus Public Tag Repository mirror</p></body></html>",
+            "<!DOCTYPE html><html><head><title>hyd</title></head><body>"
+            "<h1>hyd</h1>"
+            "<p>read-only Hydrus Public Tag Repository mirror</p>"
+            "<p><a href=\"https://github.com/lusoterra/hyd\">github.com/lusoterra/hyd</a></p>"
+            "</body></html>",
             "text/html; charset=utf-8");
     }
 
@@ -807,7 +811,10 @@ ApiResponse ApiHandlers::route(const ApiRequest& request)
             "hydd is a read-only Public Tag Repository mirror; this endpoint is not implemented.");
     }
 
-    return text_response(404, "Unknown endpoint.");
+    auto body = base_response();
+    body["error"] = "unknown endpoint";
+    body["path"] = path;
+    return ApiResponse { 404, "application/json", dump_json(body) };
 }
 
 ApiResponse ApiHandlers::handle_file_metadata(const ApiRequest& request, const nlohmann::json& params)

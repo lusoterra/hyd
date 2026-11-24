@@ -173,6 +173,15 @@ printf '%s\n' "${STATS_TEXT}" | grep -q 'Seeding'
 # The pre-0.8 top-level extension paths are gone.
 [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT_API}/stats")" = "404" ]
 [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT_API}/health")" = "404" ]
+# Root serves a small HTML page; unknown endpoints answer JSON, not plain text.
+ROOT_HTML=$(curl -s "http://127.0.0.1:${PORT_API}/")
+printf '%s\n' "${ROOT_HTML}" | grep -q '<h1>hyd</h1>'
+printf '%s\n' "${ROOT_HTML}" | grep -q 'github.com/lusoterra/hyd'
+UNKNOWN_BODY=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+    -w '\n%{http_code}' "http://127.0.0.1:${PORT_API}/no-such-endpoint")
+[ "$(printf '%s\n' "${UNKNOWN_BODY}" | tail -n 1)" = "404" ]
+printf '%s\n' "${UNKNOWN_BODY}" | grep -q '"error":"unknown endpoint"'
+printf '%s\n' "${UNKNOWN_BODY}" | grep -q '"path":"/no-such-endpoint"'
 
 # Derived tag counts: base counts plus the pending delta overlay. A store that
 # was missing the derived files builds them in the background after startup, so
