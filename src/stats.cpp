@@ -546,6 +546,9 @@ std::string render_stats(const nlohmann::json& health, const nlohmann::json* api
                         {
                             value += ", " + commas(tags) + " tags";
                         }
+                        value += iterator->value("delta_applied", false)
+                            ? ", delta applied"
+                            : ", delta pending";
                     }
                 }
             }

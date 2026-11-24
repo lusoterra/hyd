@@ -1540,6 +1540,7 @@ nlohmann::json ApiHandlers::health_json() const
             { "defined_tags", store ? store->tag_counts_defined_tags() : 0 },
             { "bytes", store ? store->tag_counts_size_bytes() : 0 },
             { "as_of", store ? store->tag_counts_built_at() : 0 },
+            { "delta_applied", store && store->tag_counts_delta_applied() },
         };
         features["tag_hashes"] = {
             { "enabled", config_.get_bool("tag_hashes_enabled", false) },

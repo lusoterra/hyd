@@ -503,11 +503,14 @@ struct Runtime
 
 bool reload_store(Runtime& runtime, std::string& error)
 {
+    const auto started = std::chrono::steady_clock::now();
     auto store = std::make_shared<hyd::Store>();
     if (!store->open(runtime.config.store_dir(), error))
     {
         return false;
     }
+    HYD_LOGF(info, "store opened in %.1fs",
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
 
     runtime.handlers->set_store(store);
     {
@@ -569,6 +572,22 @@ void build_tag_metadata_if_needed(Runtime& runtime, bool force)
     }
 }
 
+// Applies the pending delta journal to the base counts in the background. It
+// can be slow on a large delta (it verifies base membership per affected
+// hash), so it must never run on the request path or before the API starts.
+void refresh_count_overlay(Runtime& runtime)
+{
+    std::shared_ptr<const hyd::TagSource> store;
+    {
+        std::lock_guard<std::mutex> lock(runtime.store_mutex);
+        store = runtime.store;
+    }
+    if (store)
+    {
+        store->compute_count_overlay();
+    }
+}
+
 void run_sync(Runtime& runtime, bool& stopped, std::string& error)
 {
     hyd::SyncCallbacks callbacks;
@@ -587,6 +606,7 @@ void run_sync(Runtime& runtime, bool& stopped, std::string& error)
             static_cast<unsigned long long>(runtime.store->total_mapping_count()),
             static_cast<unsigned long long>(runtime.store->total_tag_count()),
             static_cast<unsigned long long>(runtime.store->delta_record_count()));
+        refresh_count_overlay(runtime);
     };
 
     if (!hyd::sync_repository(runtime.config, callbacks, stopped, error))
@@ -1036,7 +1056,10 @@ int main(int argc, char** argv)
     {
         // No sync thread will run compaction, so a one-shot metadata build is
         // safe to do in parallel with serving requests.
-        tag_thread = std::thread([&runtime] { build_tag_metadata_if_needed(runtime, false); });
+        tag_thread = std::thread([&runtime] {
+            build_tag_metadata_if_needed(runtime, false);
+            refresh_count_overlay(runtime);
+        });
     }
 
     if (sync_enabled)
@@ -1103,6 +1126,7 @@ int main(int argc, char** argv)
             // Upgrade path, and the explicit refresh knob. Doing this on the
             // sync thread means it can never race with compaction.
             build_tag_metadata_if_needed(runtime, false);
+            refresh_count_overlay(runtime);
 
             if (sync_on_start || !runtime.sync_state.built)
             {

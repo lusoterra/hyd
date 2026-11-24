@@ -24,6 +24,22 @@ hash_of() {
     python3 -c "import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$1"
 }
 
+# Waits until the background delta overlay has been applied to the counts.
+wait_counts_delta() {
+    base=$1
+    key=$2
+    tries=0
+    while [ "${tries}" -lt 100 ]; do
+        if curl -s -H "Hydrus-Client-API-Access-Key: ${key}" "${base}/hydd/stats" \
+            | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin)["features"]["tag_counts"]["delta_applied"] else 1)' 2>/dev/null; then
+            return 0
+        fi
+        tries=$((tries + 1))
+        sleep 0.1
+    done
+    return 1
+}
+
 H1=$(hash_of alpha-file)
 H2=$(hash_of beta-file)
 H3=$(hash_of gamma-file)
@@ -139,12 +155,14 @@ curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" "http://127.0.0.1:${PORT_API}/
 curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" "http://127.0.0.1:${PORT_API}/hydd/stats" | grep -q '"phase":"idle"'
 curl -s "http://127.0.0.1:${PORT_API}/hydd/health" | grep -q '"built":true'
 # Feature status is in the stats payload and the human stats page.
+wait_counts_delta "${BASE}" "${KEY}"
 curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
     "http://127.0.0.1:${PORT_API}/hydd/stats" > "${WORK}/stats.json"
 python3 - "${WORK}/stats.json" <<'PY'
 import json, sys
 f = json.load(open(sys.argv[1]))["features"]
 assert f["tag_counts"]["enabled"] is True and f["tag_counts"]["ready"] is True
+assert f["tag_counts"]["delta_applied"] is True
 assert f["tag_hashes"]["enabled"] is False and f["tag_hashes"]["ready"] is False
 assert f["seeding"]["enabled"] is True
 PY
@@ -171,6 +189,7 @@ for _ in $(seq 1 100); do
     sleep 0.1
 done
 [ "${COUNT_READY}" = "1" ]
+wait_counts_delta "${BASE}" "${KEY}"
 COUNTS=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
     -H 'Content-Type: application/json' \
     -d '{"tags":["series:alpha","creator:gamma","character:beta","character:delta","no:such-tag"]}' \
@@ -359,6 +378,7 @@ for _ in $(seq 1 100); do
     sleep 0.1
 done
 [ "${GEN_READY}" = "1" ]
+wait_counts_delta "${BASE}" "${KEY}"
 curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
     "${BASE}/hydd/tag_counts?tags=series:alpha" | grep -q '"series:alpha":2'
 if grep -q 'ignoring tag counts' "${WORK}/generation-daemon.log"; then
@@ -399,6 +419,7 @@ for _ in $(seq 1 100); do
     sleep 0.1
 done
 [ "${HASH_READY}" = "1" ]
+wait_counts_delta "${RBASE}" "${KEY}"
 
 # The stats features report the enabled reverse index as ready.
 curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \

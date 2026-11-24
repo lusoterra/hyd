@@ -6,11 +6,13 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <mutex>
 #include <unordered_set>
 
 namespace hyd {
@@ -181,6 +183,9 @@ struct Store::Impl
 
     // Pending-delta adjustments to the base counts (tag id -> -N..+N).
     std::unordered_map<std::uint32_t, std::int32_t> count_overlay;
+    mutable std::mutex overlay_mutex;
+    bool overlay_ready = false;
+    bool overlay_computing = false;
 
     std::unordered_map<std::uint32_t, std::uint32_t> siblings;
     std::unordered_map<std::uint32_t, std::vector<std::uint32_t>> parents;
@@ -252,23 +257,39 @@ struct Store::Impl
         }
     }
 
-    void build_count_overlay(const DeltaData& delta)
+    void build_count_overlay(const DeltaData& delta,
+        std::unordered_map<std::uint32_t, std::int32_t>& overlay) const
     {
-        count_overlay.clear();
+        overlay.clear();
         if (count_entries == nullptr)
         {
             return;
         }
 
-        auto adjust = [this](std::uint32_t tag_id, std::int32_t change) {
-            count_overlay[tag_id] += change;
+        auto adjust = [&overlay](std::uint32_t tag_id, std::int32_t change) {
+            overlay[tag_id] += change;
         };
+
+        // Hashes introduced since the last compaction have no base row at
+        // all, so their additions never need a partition lookup.
+        std::unordered_set<std::uint32_t> new_hashes;
+        for (const auto& entries : delta.hashes_by_partition)
+        {
+            for (const auto& entry : entries)
+            {
+                new_hashes.insert(entry.hash_id);
+            }
+        }
 
         // Files deleted in the delta still have their base mappings until the
         // next compaction; the query path hides the file, so the counts must
         // hide its tags too.
         for (const auto hash_id : delta.deleted_files)
         {
+            if (new_hashes.count(hash_id) != 0)
+            {
+                continue;
+            }
             std::vector<std::uint32_t> base;
             collect_base_tags(hash_id, base);
             for (const auto tag_id : base)
@@ -304,7 +325,10 @@ struct Store::Impl
             }
 
             std::vector<std::uint32_t> base;
-            collect_base_tags(hash_id, base);
+            if (new_hashes.count(hash_id) == 0)
+            {
+                collect_base_tags(hash_id, base);
+            }
             std::vector<std::uint32_t> final = base;
 
             auto contains = [](const std::vector<std::uint32_t>& values, std::uint32_t value) {
@@ -811,8 +835,6 @@ bool Store::open(const std::filesystem::path& store_dir, std::string& error)
         }
     }
 
-    impl_->build_count_overlay(delta_);
-
     open_ = true;
     return true;
 }
@@ -889,6 +911,64 @@ std::uint64_t Store::tag_counts_defined_tags() const
 std::uint64_t Store::tag_counts_size_bytes() const
 {
     return impl_->counts.data() != nullptr ? impl_->counts.size() : 0;
+}
+
+bool Store::tag_counts_delta_applied() const
+{
+    std::lock_guard<std::mutex> lock(impl_->overlay_mutex);
+    return impl_->overlay_ready;
+}
+
+void Store::compute_count_overlay() const
+{
+    if (impl_->count_entries == nullptr)
+    {
+        return;
+    }
+
+    if (delta_.record_count == 0)
+    {
+        std::lock_guard<std::mutex> lock(impl_->overlay_mutex);
+        impl_->overlay_ready = true;
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(impl_->overlay_mutex);
+        if (impl_->overlay_ready || impl_->overlay_computing)
+        {
+            return;
+        }
+        impl_->overlay_computing = true;
+    }
+
+    HYD_LOGF(info, "tag counts: applying the pending delta (%zu hashes affected, %zu records)",
+        delta_.mapping_additions.size(), delta_.record_count);
+
+    const auto started = std::chrono::steady_clock::now();
+    std::unordered_map<std::uint32_t, std::int32_t> overlay;
+    impl_->build_count_overlay(delta_, overlay);
+
+    std::size_t changed = 0;
+    for (const auto& [tag_id, change] : overlay)
+    {
+        (void)tag_id;
+        if (change != 0)
+        {
+            ++changed;
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(impl_->overlay_mutex);
+        impl_->count_overlay = std::move(overlay);
+        impl_->overlay_ready = true;
+        impl_->overlay_computing = false;
+    }
+
+    HYD_LOGF(info, "tag counts: delta overlay ready in %.1fs (%zu tags changed)",
+        std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - started).count(), changed);
 }
 
 std::int64_t Store::tag_hashes_built_at() const
@@ -979,10 +1059,13 @@ std::optional<std::uint64_t> Store::tag_count(std::string_view tag) const
     {
         count = read_u32(impl_->count_entries + static_cast<std::size_t>(*tag_id) * 4);
     }
-    if (const auto iterator = impl_->count_overlay.find(*tag_id);
-        iterator != impl_->count_overlay.end())
     {
-        count += iterator->second;
+        std::lock_guard<std::mutex> lock(impl_->overlay_mutex);
+        if (const auto iterator = impl_->count_overlay.find(*tag_id);
+            iterator != impl_->count_overlay.end())
+        {
+            count += iterator->second;
+        }
     }
 
     return static_cast<std::uint64_t>(std::max<std::int64_t>(0, count));

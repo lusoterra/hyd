@@ -73,6 +73,8 @@ public:
     virtual std::int64_t tag_counts_built_at() const { return 0; }
     virtual std::uint64_t tag_counts_defined_tags() const { return 0; }
     virtual std::uint64_t tag_counts_size_bytes() const { return 0; }
+    virtual bool tag_counts_delta_applied() const { return false; }
+    virtual void compute_count_overlay() const {}
 
     // Reverse lookup (tag -> hashes). Off by default because the postings
     // index is roughly one u32 per mapping plus a hash-id map.
