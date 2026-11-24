@@ -797,18 +797,28 @@ ApiResponse ApiHandlers::route(const ApiRequest& request)
         return handle_file_hashes(request, params);
     }
 
+    // Known Hydrus endpoints this mirror deliberately does not implement get
+    // an explicit 501 instead of a generic 404, so clients can tell a missing
+    // feature from a wrong URL.
+    auto not_implemented = [&](const char* reason) {
+        auto body = base_response();
+        body["error"] = "not implemented";
+        body["path"] = path;
+        body["reason"] = reason;
+        return ApiResponse { 501, "application/json", dump_json(body) };
+    };
+
     if (path == "/get_files/file" || path == "/get_files/thumbnail"
         || path == "/get_files/render" || path == "/get_files/file_seed")
     {
-        return text_response(404, "hydd stores tags only; it does not store files or thumbnails.");
+        return not_implemented("the mirror stores tags only; files and thumbnails are not served");
     }
 
     if (path.rfind("/add_", 0) == 0 || path.rfind("/edit_", 0) == 0
         || path.rfind("/manage_", 0) == 0 || path == "/get_files/search_files"
         || path == "/request_new_permissions" || path == "/commit_pending")
     {
-        return text_response(501,
-            "hydd is a read-only Public Tag Repository mirror; this endpoint is not implemented.");
+        return not_implemented("the mirror is read-only; search and mutation endpoints are not supported");
     }
 
     auto body = base_response();

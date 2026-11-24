@@ -294,10 +294,15 @@ repository update stream and accept the repository
 header as well as the Client API key headers. They never accept uploads or
 petitions.
 .PP
-The server speaks JSON only. CBOR requests return 406. File and thumbnail
-endpoints return 404 because the mirror stores no files. Search and mutation
-endpoints return 501. The full request and response reference, with runnable
-curl examples, is in
+The server speaks JSON only. CBOR requests return 406. Known Hydrus endpoints
+that the mirror does not serve - files, thumbnails, search, and mutations -
+return 501 with a JSON body containing
+.BR error ,
+.B path ,
+and
+.B reason
+fields. Unknown paths return a JSON 404. The full request and response
+reference, with runnable curl examples, is in
 .I contrib/docs/api.md
 and
 .I contrib/docs/examples.md

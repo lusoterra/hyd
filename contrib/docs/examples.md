@@ -261,6 +261,10 @@ curl -s -o /dev/null -w '%{http_code}\n' "$BASE/hyd/stats"
 # JSON 404 for an unknown endpoint
 curl -s "$BASE/no-such-endpoint"
 
+# Known but unsupported Hydrus endpoints return 501 JSON
+curl -s "$BASE/get_files/file"
+curl -s "$BASE/add_tags/add_tags"
+
 # 406 for CBOR
 curl -s -o /dev/null -w '%{http_code}\n' "$BASE/api_version?cbor=1"
 

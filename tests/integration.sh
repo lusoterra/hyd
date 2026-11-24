@@ -183,6 +183,13 @@ UNKNOWN_BODY=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
 [ "$(printf '%s\n' "${UNKNOWN_BODY}" | tail -n 1)" = "404" ]
 printf '%s\n' "${UNKNOWN_BODY}" | grep -q '"error":"unknown endpoint"'
 printf '%s\n' "${UNKNOWN_BODY}" | grep -q '"path":"/no-such-endpoint"'
+# Known Hydrus endpoints we do not serve are an explicit 501, not a 404.
+for endpoint in /get_files/file /get_files/thumbnail /get_files/search_files /add_tags/add_tags; do
+    NOT_IMPLEMENTED=$(curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
+        -w '\n%{http_code}' "http://127.0.0.1:${PORT_API}${endpoint}")
+    [ "$(printf '%s\n' "${NOT_IMPLEMENTED}" | tail -n 1)" = "501" ]
+    printf '%s\n' "${NOT_IMPLEMENTED}" | grep -q '"error":"not implemented"'
+done
 
 # Derived tag counts: base counts plus the pending delta overlay. A store that
 # was missing the derived files builds them in the background after startup, so

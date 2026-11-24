@@ -415,12 +415,26 @@ and queued for re-download). The body is `application/octet-stream`.
 
 ## Not implemented
 
+Known Hydrus Client API endpoints that this mirror deliberately does not
+serve return `501` with a JSON body so a client can tell a missing feature from
+a mistyped URL:
+
 - `GET /get_files/file`, `/get_files/thumbnail`, `/get_files/render`,
-  `/get_files/file_seed` - `404`, the mirror stores no media.
+  `/get_files/file_seed` - the mirror stores no media.
 - `/add_*`, `/edit_*`, `/manage_*`, `/get_files/search_files`,
-  `/request_new_permissions`, `/commit_pending` - `501`, the mirror is
-  read-only.
-- Anything else - `404` JSON with `error` and `path`.
+  `/request_new_permissions`, `/commit_pending` - the mirror is read-only.
+
+```json
+{
+  "version": 97,
+  "hydrus_version": 696,
+  "error": "not implemented",
+  "path": "/get_files/file",
+  "reason": "the mirror stores tags only; files and thumbnails are not served"
+}
+```
+
+Anything else returns `404` JSON with `error` and `path`:
 
 ## Limits
 
