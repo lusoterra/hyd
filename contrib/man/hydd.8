@@ -294,11 +294,14 @@ repository update stream and accept the repository
 header as well as the Client API key headers. They never accept uploads or
 petitions. The relay is intended for another
 .BR hydd .
-The official Hydrus client is not supported yet: its repository login expects
-a session cookie and its account sync uses
+The official Hydrus client is not supported yet: it needs
+.BR /service_info
+when adding the repository, its repository login expects a session cookie,
+and its account sync uses
 .BR /account ,
 .BR /options ,
-and related endpoints that are not implemented. See
+and related endpoints that are not implemented. The tag data model itself is
+compatible, because the client also downloads the whole repository. See
 .I contrib/docs/compatibility.md
 for the full explanation.
 .PP

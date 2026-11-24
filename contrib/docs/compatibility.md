@@ -53,9 +53,22 @@ this hash?" and can relay the PTR stream to another mirror.
 
 ## Why the official Hydrus client is not supported yet
 
+The data model is not the problem. A Hydrus client always downloads the whole
+repository and builds its tags locally, and Hyd can serve that whole stream when
+`keep_update_cache = true` and the cache is complete. Once the client can add
+and authenticate to the repository, it would sync the tag repository normally,
+keep all of its local files, thumbnails, search, notes, ratings, pages, and
+imports, and behave like a client with a read-only tag repository. Only PTR
+writes - submitting hashes, tags, and petitions - would be unavailable.
+
+The current gap is the repository protocol envelope around that stream, not the
+stream itself.
+
 A Hydrus client can only use a repository after its repository login and
 account sync succeed. The client:
 
+- calls `GET /service_info` when the repository is added, to learn its service
+  key, type, and name;
 - calls `GET /session_key` with `Hydrus-Key` and expects the server to set a
   `session_key` **cookie**; every later request carries that cookie;
 - calls `GET /account` and `GET /options` to learn whether the account is
@@ -67,8 +80,8 @@ Hyd currently:
 - answers `/session_key` with the **Client API** JSON response (a session key in
   the body, no cookie), because that path is shared with the Client API;
 - does not accept cookies for authentication;
-- does not implement `/account`, `/options`, `/access_key_verification`, or
-  `/service_info`;
+- does not implement `/service_info`, `/account`, `/options`, or
+  `/access_key_verification`;
 - serves plain HTTP and does not terminate TLS;
 - has no write, petition, or account endpoints at all.
 
@@ -82,17 +95,18 @@ relay.
 
 At minimum:
 
-1. Distinguish repository `/session_key` from Client API `/session_key`. The
+1. Implement `/service_info` so the client can add the repository as a tag
+   repository with the configured service key and name.
+2. Distinguish repository `/session_key` from Client API `/session_key`. The
    repository login sends `Hydrus-Key`; the Client API sends
    `Hydrus-Client-API-Access-Key` or `Hydrus-Client-API-Session-Key`. The
    repository path needs a `Set-Cookie: session_key=...` response.
-2. Accept that cookie on `/metadata` and `/update` for non-loopback clients.
-3. Implement a synthetic read-only account for `/account` and `/options`, plus
-   `/access_key_verification` and whatever service-info endpoint the client
-   expects. The account must be functional but grant no upload or petition
-   permission.
-4. Put HTTPS in front, since the client uses `https://` for repositories.
-5. Decide what to do about the client's periodic account/options polling and
+3. Accept that cookie on `/metadata` and `/update` for non-loopback clients.
+4. Implement a synthetic read-only account for `/account` and `/options`, plus
+   `/access_key_verification`. The account must be functional but grant no
+   upload or petition permission.
+5. Put HTTPS in front, since the client uses `https://` for repositories.
+6. Decide what to do about the client's periodic account/options polling and
    its "service info" display. A read-only account can work, but it will show
    no write permissions.
 
@@ -102,6 +116,16 @@ service-info responses are mandatory for login, and whether they would accept a
 documented compatibility profile. Hyd already serves the exact metadata and
 update bytes, so the gap is the surrounding account/session protocol, not the
 stream format.
+
+## Do not proxy writes to the PTR
+
+Hyd must not forward uploads or petitions to the official PTR. That would need
+the user's PTR account credentials, would make every Hyd user share one
+identity, would bypass the PTR's own account, rate-limit, janitor, and ban
+model, and would quietly make the mirror a write path the owner did not agree
+to operate. A read-only account with no petition permission is the supported
+shape: the client syncs and queries, and PTR submissions remain a separate
+action in the user's own client against the real PTR.
 
 ## If you host Hyd publicly
 

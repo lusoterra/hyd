@@ -384,9 +384,10 @@ returns `503`.
 
 Authenticated repository relay. Requires `keep_update_cache = true` and a
 complete cache. Serves the exact Hydrus repository metadata stream so another
-`hydd` can sync from this mirror. The official Hydrus client additionally needs
-repository session cookies and account endpoints that this read-only mirror
-does not implement; see [compatibility.md](compatibility.md).
+`hydd` can sync from this mirror. The official Hydrus client also downloads the
+whole repository, so the tag data model fits; it additionally needs
+`/service_info`, repository session cookies, and account endpoints that this
+read-only mirror does not implement yet. See [compatibility.md](compatibility.md).
 
 Parameter: `since` - non-negative update index, default `0`.
 
