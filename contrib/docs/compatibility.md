@@ -117,6 +117,39 @@ documented compatibility profile. Hyd already serves the exact metadata and
 update bytes, so the gap is the surrounding account/session protocol, not the
 stream format.
 
+## A read-only mirror profile to propose
+
+The protocol is already split by method and path: `GET /metadata` and
+`GET /update` read; `POST /update` and `/petition` write. The ask is not a new
+API, it is a declared read-only mode that clients can accept without pretending
+the mirror is a full PTR:
+
+- document a minimal read-only repository profile: `/service_info`,
+  `/session_key` with a session cookie, `/metadata`, and `GET /update`;
+- have `/service_info` relay the upstream repository identity (same service
+  key, type, and name) plus a read-only flag, so the mirror is the same service
+  with the same tags rather than a second, unrelated repository;
+- return a functional account from `/account` and `/options` that has no
+  upload or petition permission, or let the client skip account sync for a
+  service marked read-only;
+- make the client show such a service as read-only, without repeated upload
+  attempts or account-error popups;
+- require mirrors to relay bytes unmodified and keep TLS; writes always go to
+  the authoritative PTR, never through a mirror.
+
+This fits the Hydrus model rather than fighting it. Clients still download
+everything and keep their own local database, so there is no central query
+oracle. Mirrors reduce load on the PTR, but writes stay centralized and
+moderated. That does not make a mirror tamper-proof: repository metadata is not
+signed, so a malicious mirror can serve a divergent stream just like any other
+repository host. Relaying the exact bytes over TLS is the expected behaviour,
+not a cryptographic guarantee.
+
+The main identity question is the service key. Hyd currently generates its own
+`service_key` and would need to fetch and relay the upstream repository's
+service info for a transparent mirror; otherwise a client sees a separate tag
+repository with the same tags rather than the same service.
+
 ## Do not proxy writes to the PTR
 
 Hyd must not forward uploads or petitions to the official PTR. That would need
