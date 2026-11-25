@@ -55,10 +55,13 @@ add_executable(hydd src/main.cpp)
 target_link_libraries(hydd PRIVATE hydcore)
 target_compile_options(hydd PRIVATE -Wall -Wextra -Wpedantic -Wno-unused-parameter)
 
+add_executable(hyd src/hyd.cpp)
+target_link_libraries(hyd PRIVATE OpenSSL::Crypto)
+target_compile_options(hyd PRIVATE -Wall -Wextra -Wpedantic)
+
 include(GNUInstallDirs)
 
-install(TARGETS hydd RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-install(PROGRAMS contrib/hyd DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(TARGETS hydd hyd RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 # Linux daemons use /etc, not <prefix>/etc, even when the prefix is /usr.
 install(FILES contrib/hydd.conf DESTINATION /etc RENAME hydd.conf
     PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ)
@@ -87,7 +90,7 @@ add_test(NAME unit COMMAND hyd_unit_tests)
 find_program(BASH_PROGRAM bash)
 if (BASH_PROGRAM)
     add_test(NAME integration
-        COMMAND ${BASH_PROGRAM} ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration.sh $<TARGET_FILE:hydd>)
+        COMMAND ${BASH_PROGRAM} ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration.sh $<TARGET_FILE:hydd> $<TARGET_FILE:hyd>)
     set_tests_properties(integration PROPERTIES TIMEOUT 120)
 
     add_test(NAME integration_future

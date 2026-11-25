@@ -1,10 +1,17 @@
 #!/bin/sh
 # End-to-end test using a fake Hydrus repository. Requires python3 and curl.
-# Usage: tests/integration.sh /path/to/hydd
+# Usage: tests/integration.sh /path/to/hydd [/path/to/hyd]
 
 set -eu
 
 BIN=${1:-./hydd}
+if [ "$#" -ge 2 ]; then
+    HYD=$2
+elif [ "${BIN#*/}" != "${BIN}" ]; then
+    HYD=$(dirname -- "${BIN}")/hyd
+else
+    HYD=hyd
+fi
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 FAKE="$ROOT/tests/fake_repository.py"
 WORK=$(mktemp -d /tmp/hyd-integration.XXXXXX)
@@ -248,7 +255,7 @@ PY
     "${BASE}/hyd/tag_counts")" = "400" ]
 
 HELPER_COUNTS=$(HYD_BIN="${BIN}" HYD_CONFIG="${WORK}/hydd.conf" \
-    "${ROOT}/contrib/hyd" counts "series:alpha")
+    "${HYD}" counts "series:alpha")
 printf '%s\n' "${HELPER_COUNTS}" | grep -q 'series:alpha	2'
 
 # Reverse search is off by default and must not be reachable.
@@ -319,20 +326,20 @@ printf 'alpha-file' > "${WORK}/alpha-file"
 printf 'legacy-file' > "${WORK}/legacy-file"
 
 HELPER_TAGS=$(HYD_BIN="${BIN}" HYD_CONFIG="${WORK}/hydd.conf" \
-    "${ROOT}/contrib/hyd" "${WORK}/alpha-file")
+    "${HYD}" "${WORK}/alpha-file")
 echo "${HELPER_TAGS}" | grep -q "sha256 ${H1}"
 echo "${HELPER_TAGS}" | grep -q 'series:alpha'
 
 HELPER_TAGS=$(HYD_BIN="${BIN}" HYD_CONFIG="${WORK}/hydd.conf" \
-    "${ROOT}/contrib/hyd" --sha1 "${WORK}/legacy-file")
+    "${HYD}" --sha1 "${WORK}/legacy-file")
 echo "${HELPER_TAGS}" | grep -q 'series:alpha'
 
 HELPER_TAGS=$(HYD_BIN="${BIN}" HYD_CONFIG="${WORK}/hydd.conf" \
-    "${ROOT}/contrib/hyd" "${H1}")
+    "${HYD}" "${H1}")
 echo "${HELPER_TAGS}" | grep -q 'series:alpha'
 
 [ "$(HYD_BIN="${BIN}" HYD_CONFIG="${WORK}/hydd.conf" \
-    "${ROOT}/contrib/hyd" version)" = "hyd v${VERSION}" ]
+    "${HYD}" version)" = "hyd v${VERSION}" ]
 
 BODY=$(curl -s -X POST -H 'Content-Type: application/json' \
     -H "Hydrus-Client-API-Access-Key: ${KEY}" \
@@ -525,10 +532,10 @@ done
     "${RBASE}/hyd/tag_hashes?tag=no:such-tag")" = "404" ]
 
 HELPER_HASHES=$(HYD_BIN="${BIN}" HYD_CONFIG="${WORK}/reverse.conf" \
-    "${ROOT}/contrib/hyd" hashes --limit 1 -- "series:alpha" 2>/dev/null)
+    "${HYD}" hashes --limit 1 -- "series:alpha" 2>/dev/null)
 printf '%s\n' "${HELPER_HASHES}" | grep -q "${H1}"
 HELPER_AFTER=$(HYD_BIN="${BIN}" HYD_CONFIG="${WORK}/reverse.conf" \
-    "${ROOT}/contrib/hyd" hashes-after "series:alpha" 10 1 2>/dev/null)
+    "${HYD}" hashes-after "series:alpha" 10 1 2>/dev/null)
 printf '%s\n' "${HELPER_AFTER}" | grep -q "${L1}"
 
 # Multiple tags are ANDed; a leading '-' excludes. total is null when the
@@ -588,10 +595,10 @@ PY
     "${RBASE}/hyd/tag_hashes")" = "404" ]
 
 HELPER_AND=$(HYD_BIN="${BIN}" HYD_CONFIG="${WORK}/reverse.conf" \
-    "${ROOT}/contrib/hyd" hashes --limit 10 -- "series:alpha" "character:beta" 2>/dev/null)
+    "${HYD}" hashes --limit 10 -- "series:alpha" "character:beta" 2>/dev/null)
 printf '%s\n' "${HELPER_AND}" | grep -q "${H1}"
 HELPER_NOT=$(HYD_BIN="${BIN}" HYD_CONFIG="${WORK}/reverse.conf" \
-    "${ROOT}/contrib/hyd" hashes -- "series:alpha" "-character:beta" 2>/dev/null)
+    "${HYD}" hashes -- "series:alpha" "-character:beta" 2>/dev/null)
 printf '%s\n' "${HELPER_NOT}" | grep -q "${L1}"
 
 kill "${DAEMON_PID}" 2>/dev/null || true
