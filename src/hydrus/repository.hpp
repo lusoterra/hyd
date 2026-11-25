@@ -29,7 +29,19 @@ struct RepositoryMetadata
     std::size_t update_file_count() const;
     std::vector<RepositoryUpdate> all_updates_ordered() const;
 
-    void merge(const RepositoryMetadata& other);
+    // Merges another slice. Update indices are immutable, so a slice that
+    // changes the hashes or time range of an already-known index is rejected
+    // instead of being folded into the local history.
+    bool merge(const RepositoryMetadata& other, std::string& error);
+};
+
+enum class UpdateFetchResult
+{
+    ok,
+    // The request failed (network, HTTP status, or size cap).
+    error,
+    // The body was received but its sha256 does not match the requested hash.
+    hash_mismatch,
 };
 
 class RepositoryClient
@@ -38,7 +50,7 @@ public:
     RepositoryClient(std::string base_url, std::string access_key);
 
     bool fetch_metadata(std::int64_t since, RepositoryMetadata& metadata, std::string& error);
-    bool fetch_update(const Hash& hash, Bytes& compressed_body, std::string& error);
+    UpdateFetchResult fetch_update(const Hash& hash, Bytes& compressed_body, std::string& error);
 
     void set_timeout_seconds(long seconds) { http_.set_timeout_seconds(seconds); }
     void set_rate_limit_kib(std::uint64_t kib) { http_.set_rate_limit_kib(kib); }

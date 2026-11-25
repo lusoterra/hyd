@@ -19,10 +19,12 @@ PORT_REPO=46871
 PORT_API=46869
 SERVER_PID=
 DAEMON_PID=
+TRUST_PID=
 
 cleanup() {
     [ -n "${DAEMON_PID}" ] && kill "${DAEMON_PID}" 2>/dev/null || true
     [ -n "${SERVER_PID}" ] && kill "${SERVER_PID}" 2>/dev/null || true
+    [ -n "${TRUST_PID}" ] && kill "${TRUST_PID}" 2>/dev/null || true
     rm -rf "${WORK}"
 }
 trap cleanup EXIT INT TERM
@@ -59,6 +61,8 @@ listen_address = 127.0.0.1
 listen_port = ${PORT_API}
 repository_url = http://127.0.0.1:${PORT_REPO}
 repository_access_key = 1111111111111111111111111111111111111111111111111111111111111111
+# These tests exercise the download path, not split trust.
+trust_root =
 access_key = 2222222222222222222222222222222222222222222222222222222222222222,3333333333333333333333333333333333333333333333333333333333333333
 require_localhost_key = true
 service_name = integration ptr
@@ -307,6 +311,7 @@ listen_address = 127.0.0.1
 listen_port = 46880
 repository_url = ${BASE}
 repository_access_key = ${KEY}
+trust_root =
 access_key = ${KEY}
 service_name = relay client
 partitions = 4
@@ -739,6 +744,8 @@ listen_address = 127.0.0.1
 listen_port = ${RESUME_PORT}
 repository_url = http://127.0.0.1:${PORT_REPO}
 repository_access_key = 1111111111111111111111111111111111111111111111111111111111111111
+# These tests exercise the download path, not split trust.
+trust_root =
 partitions = 4
 sync_interval_seconds = 3600
 keep_update_cache = true
@@ -787,6 +794,8 @@ listen_address = 127.0.0.1
 listen_port = ${ADOPT_PORT}
 repository_url = http://127.0.0.1:${PORT_REPO}
 repository_access_key = 1111111111111111111111111111111111111111111111111111111111111111
+# These tests exercise the download path, not split trust.
+trust_root =
 partitions = 4
 sync_interval_seconds = 3600
 keep_update_cache = true
@@ -848,6 +857,7 @@ data_dir = ${WORK}/data
 listen_address = 127.0.0.1
 listen_port = ${PORT_API}
 repository_url = http://127.0.0.1:${PORT_REPO}
+trust_root =
 partitions = 4
 sync_interval_seconds = 3600
 rate_limit_requests_per_minute = 30
@@ -869,5 +879,62 @@ done
 LIMITED=$(curl -s -D "${WORK}/rate-headers" -o /dev/null -w '%{http_code}' "${BASE}/health")
 [ "${LIMITED}" = "429" ]
 grep -qi '^retry-after:' "${WORK}/rate-headers"
+
+# Split trust: metadata and update hashes come from the trust root, bulk bytes
+# come from a mirror. A mirror that lags only triggers per-file fallback; a
+# mirror that serves bytes not matching the trust root aborts the sync loudly.
+stop_repo
+PORT_TRUST=$((PORT_REPO + 2))
+python3 "${FAKE}" --port "${PORT_TRUST}" --mode incremental > "${WORK}/split-trust.log" 2>&1 &
+TRUST_PID=$!
+python3 "${FAKE}" --port "${PORT_REPO}" --mode incremental --missing-index 1 > "${WORK}/split-mirror.log" 2>&1 &
+SERVER_PID=$!
+sleep 0.7
+
+cat > "${WORK}/split.conf" <<EOF
+data_dir = ${WORK}/split-data
+listen_address = 127.0.0.1
+listen_port = $((PORT_API + 50))
+repository_url = http://127.0.0.1:${PORT_REPO}
+repository_access_key = 1111111111111111111111111111111111111111111111111111111111111111
+trust_root = http://127.0.0.1:${PORT_TRUST}
+trust_root_access_key = 1111111111111111111111111111111111111111111111111111111111111111
+partitions = 4
+sync_interval_seconds = 3600
+keep_update_cache = true
+log_level = info
+EOF
+
+"${BIN}" -c "${WORK}/split.conf" --sync-once > "${WORK}/split.log" 2>&1
+grep -q 'fetching it from the trust root' "${WORK}/split.log"
+"${BIN}" -c "${WORK}/split.conf" --verify-store | grep -q '5 hashes'
+OUT=$("${BIN}" -c "${WORK}/split.conf" --query "${H1}")
+echo "${OUT}" | grep -q 'series:alpha'
+
+stop_repo
+python3 "${FAKE}" --port "${PORT_REPO}" --mode incremental --corrupt-index 0 > "${WORK}/split-bad-mirror.log" 2>&1 &
+SERVER_PID=$!
+sleep 0.7
+
+cat > "${WORK}/split-bad.conf" <<EOF
+data_dir = ${WORK}/split-bad-data
+listen_address = 127.0.0.1
+listen_port = $((PORT_API + 51))
+repository_url = http://127.0.0.1:${PORT_REPO}
+repository_access_key = 1111111111111111111111111111111111111111111111111111111111111111
+trust_root = http://127.0.0.1:${PORT_TRUST}
+trust_root_access_key = 1111111111111111111111111111111111111111111111111111111111111111
+partitions = 4
+keep_update_cache = true
+log_level = info
+EOF
+
+if "${BIN}" -c "${WORK}/split-bad.conf" --sync-once > "${WORK}/split-bad.log" 2>&1; then
+    echo "a mirror serving mismatching bytes was accepted" >&2
+    exit 1
+fi
+grep -q 'does not match the SHA-256 published by the trust root' "${WORK}/split-bad.log"
+grep -q 'Refusing to use it' "${WORK}/split-bad.log"
+[ ! -e "${WORK}/split-bad-data/store/manifest.json" ]
 
 echo "integration test passed"

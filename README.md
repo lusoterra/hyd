@@ -54,7 +54,9 @@ The commented default file is [`contrib/hydd.conf`](contrib/hydd.conf). The main
 | `listen_address` / `listen_port` | `127.0.0.1` / `45869` | API listener |
 | `access_key` / `access_key_file` | generated | One or more API keys; comma-separated in config, one per line in the file |
 | `require_localhost_key` | `false` | Require a valid key even on loopback (disables localhost trust) |
-| `repository_url` | `https://ptr.hydrus.network:45871` | Upstream Hydrus repository; must use `https` (plain `http` is accepted only on loopback) |
+| `repository_url` | `https://ptr.hydrus.network:45871` | Where update files are downloaded from; must use `https` (plain `http` is accepted only on loopback) |
+| `trust_root` | `https://ptr.hydrus.network:45871` | Repository whose metadata is authoritative for update hashes; empty means trust `repository_url` for both metadata and downloads |
+| `trust_root_access_key` | `repository_access_key` | Access key for `trust_root` when it is a different server |
 | `partitions` | `16` | Custom-store partitions, power of two |
 | `compact_after_delta_mb` | `512` | Automatic compaction threshold |
 | `sync_interval_seconds` | `3600` | Metadata check interval |
@@ -79,15 +81,27 @@ The commented default file is [`contrib/hydd.conf`](contrib/hydd.conf). The main
 
 ### Repository trust
 
-`hydd` treats `repository_url` as its source of truth. Syncing requires `https`; a plain `http` upstream is refused unless the host is loopback, so a local test repository still works. TLS is the only transport authentication the Hydrus repository ecosystem provides, so do not disable it with a reverse proxy or a plain-HTTP upstream.
+`trust_root` is the repository whose metadata is authoritative. Its `/metadata?since=N` response lists the SHA-256 of every update file; `repository_url` is only the bulk download source. When both point at the PTR (the default) this is a single trusted host. When `repository_url` points at a mirror, hydd still fetches the small metadata slice from the PTR and accepts an update file from the mirror only if the bytes hash to the PTR-listed value. The download source's own `/metadata` is never consulted, so a mirror cannot influence which files are requested. A mirror can lag or be corrupt, but it cannot inject or alter content.
+
+The two failure modes are deliberately different:
+
+| Event | Behaviour |
+| --- | --- |
+| Mirror does not have a file yet (it lags the trust root) | That one file is fetched from `trust_root`, the fallback is logged, and the sync continues. A lagging mirror never stalls a sync, so no artificial delay is needed. |
+| Mirror returns bytes whose SHA-256 does not match the trust root | The sync aborts loudly without caching the file. This is a trust failure, not lag: the download source may be corrupt or compromised. Switch `repository_url` to another instance and run the sync again; verified cache files are kept, so the retry resumes where it stopped. |
+| Trust root changes the hash or time range of an index it already published | The sync aborts loudly instead of mixing two histories. Point `trust_root` at a repository you trust, or use a fresh `data_dir` if the trust root really was rebuilt. |
+
+Setting `trust_root` to an empty value restores the older behaviour where `repository_url` supplies both metadata and update bytes; a mismatch then means the server disagrees with its own metadata, and the same loud abort applies.
+
+Syncing requires `https` for both URLs; a plain `http` upstream is refused unless the host is loopback, so a local test repository still works. TLS is the transport authentication for the trust root. Update bytes from `repository_url` are additionally pinned by the trust root hashes, but the metadata itself is not signed, so the trust root is still a trust choice, not a cryptographic guarantee beyond TLS.
 
 Within that channel:
 
-- every update file is checked against the SHA-256 listed in the repository metadata before it is cached or used;
+- every update file is checked against the SHA-256 listed in the trusted metadata before it is cached or used;
 - cached files are re-hashed before being skipped, and a corrupt entry is deleted and downloaded again;
 - malformed updates, unknown serialisable versions/types/actions, out-of-range ids, invalid metadata indices, and oversized responses abort the sync pass instead of being skipped silently.
 
-That is integrity checking, not authenticity. The repository metadata is not signed, so a host you point at can choose which hashes and tags are "correct". If you sync from the official PTR you are trusting the PTR over TLS. If you point `repository_url` at another `hydd`, or at any other Hydrus server, you are trusting that operator with the complete contents of your mirror. The relay is a transport mirror, not a trust anchor: a client that syncs from your `hydd` applies the same checks against the metadata your `hydd` serves. The shared PTR access key is public and is an account credential, not a secret or a way to verify the server.
+If you point `trust_root` at another `hydd`, or at any other Hydrus server, you are trusting that operator with the complete contents of your mirror. A relay is a transport mirror, not a trust anchor: a client that syncs from your `hydd` applies the same checks against the metadata your `hydd` serves. The shared PTR access key is public and is an account credential, not a secret or a way to verify the server.
 
 ### Storage
 

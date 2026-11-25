@@ -2163,10 +2163,8 @@ bool build_initial_store(const Config& config, const RepositoryMetadata& metadat
 }
 
 bool download_updates(const Config& config, const std::vector<UpdateSource>& sources,
-    const SyncCallbacks& callbacks, SyncState& state, RepositoryClient& repository, std::string& error)
+    const SyncCallbacks& callbacks, SyncState& state, std::string& error)
 {
-    (void)repository;
-
     std::vector<DownloadItem> items;
     items.reserve(sources.size());
     for (const auto& source : sources)
@@ -2585,9 +2583,20 @@ bool sync_repository(const Config& config, const SyncCallbacks& callbacks, bool&
         }
     }
 
-    RepositoryClient repository(config.repository_url(), config.repository_access_key());
-    repository.set_timeout_seconds(config.get_int("download_timeout_seconds", 120));
-    repository.set_rate_limit_kib(static_cast<std::uint64_t>(std::max<std::int64_t>(0, config.get_int("download_rate_limit_kib", 0))));
+    // Metadata comes from the trust root, never from the bulk download source.
+    // An empty trust_root keeps the historical behaviour: repository_url is
+    // both the download source and the source of the update hashes.
+    const auto configured_trust_root = config.trust_root();
+    const std::string metadata_url = configured_trust_root.empty()
+        ? config.repository_url()
+        : configured_trust_root;
+    const std::string metadata_access_key = configured_trust_root.empty()
+        ? config.repository_access_key()
+        : config.trust_root_access_key();
+
+    RepositoryClient metadata_repository(metadata_url, metadata_access_key);
+    metadata_repository.set_timeout_seconds(config.get_int("download_timeout_seconds", 120));
+    metadata_repository.set_rate_limit_kib(static_cast<std::uint64_t>(std::max<std::int64_t>(0, config.get_int("download_rate_limit_kib", 0))));
 
     RepositoryMetadata metadata;
     if (!load_repository_metadata_file(metadata_path, metadata, error))
@@ -2631,7 +2640,7 @@ bool sync_repository(const Config& config, const SyncCallbacks& callbacks, bool&
     RepositoryMetadata fresh;
     if (!resume_snapshot)
     {
-        if (!repository.fetch_metadata(since, fresh, error))
+        if (!metadata_repository.fetch_metadata(since, fresh, error))
         {
             if (state.built)
             {
@@ -2642,7 +2651,10 @@ bool sync_repository(const Config& config, const SyncCallbacks& callbacks, bool&
             return false;
         }
 
-        metadata.merge(fresh);
+        if (!metadata.merge(fresh, error))
+        {
+            return false;
+        }
         state.next_update_due = metadata.next_update_due;
         if (!save_repository_metadata_file(metadata_path, metadata, error))
         {
@@ -2704,7 +2716,7 @@ bool sync_repository(const Config& config, const SyncCallbacks& callbacks, bool&
         return false;
     }
 
-    if (!download_updates(config, all_sources, callbacks, state, repository, error))
+    if (!download_updates(config, all_sources, callbacks, state, error))
     {
         if (error == "stopped")
         {
@@ -2765,14 +2777,20 @@ bool sync_repository(const Config& config, const SyncCallbacks& callbacks, bool&
         // retries if the repository is unavailable right now.
         RepositoryMetadata catchup;
         std::string catchup_error;
-        if (!repository.fetch_metadata(state.next_index, catchup, catchup_error))
+        if (!metadata_repository.fetch_metadata(state.next_index, catchup, catchup_error))
         {
             HYD_LOGF(warn, "initial build finished from the checkpointed snapshot; "
                 "cannot fetch newer indices yet: %s", catchup_error.c_str());
         }
+        else if (!metadata.merge(catchup, catchup_error))
+        {
+            // The store is already complete. Leave it alone and let the next
+            // regular sync fail loudly on the same inconsistency.
+            HYD_LOGF(error, "refusing to merge repository metadata after the initial build: %s",
+                catchup_error.c_str());
+        }
         else
         {
-            metadata.merge(catchup);
             state.next_update_due = metadata.next_update_due;
             if (!save_repository_metadata_file(metadata_path, metadata, catchup_error))
             {
@@ -2813,7 +2831,7 @@ bool sync_repository(const Config& config, const SyncCallbacks& callbacks, bool&
             if (!catchup_sources.empty())
             {
                 catchup_ok = download_updates(
-                    config, catchup_sources, callbacks, state, repository, catchup_error);
+                    config, catchup_sources, callbacks, state, catchup_error);
                 if (!catchup_ok && catchup_error == "stopped")
                 {
                     stopped_flag = true;

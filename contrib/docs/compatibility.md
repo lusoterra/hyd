@@ -214,7 +214,13 @@ What is still missing for this to be smooth:
   needs either a client-side `download_url`/`mirror_of` field with the PTR as
   the write target, or a way to attach a mirror to an existing service. Adding
   a second service does not work well because the service key identifies the
-  repository and clients key services by that key.
+  repository and clients key services by that key. hydd itself already
+  implements the split for its own sync: `repository_url` is the bulk download
+  source and `trust_root` (default: the PTR) supplies the authoritative update
+  hashes. A lagging mirror only causes per-file fallback to the trust root; a
+  mirror that serves bytes not matching the trust root aborts the sync loudly
+  so the operator can switch instances, and a trust root that rewrites an
+  already-published index aborts the same way.
 - **Freshness and trust.** A mirror can lag. The strongest design fetches the
   small `/metadata` response from the authoritative PTR and the large
   `/update` bodies from a mirror, verifying each file against the hash in that

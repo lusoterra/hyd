@@ -298,7 +298,63 @@ int main()
         assert(config.finalize(config_error));
         assert(config.max_download_bytes() == 64ull * 1024 * 1024 * 1024);
 
+        // The trust root defaults to the PTR even when the download source is
+        // somewhere else. An explicitly empty value disables split trust.
+        write_config("https://mirror.example:45871");
+        assert(config.load(path, true, config_error));
+        assert(config.finalize(config_error));
+        assert(config.trust_root() == "https://ptr.hydrus.network:45871");
+        assert(config.trust_root_access_key() == config.repository_access_key());
+
+        write_config("https://mirror.example:45871\ntrust_root =\n");
+        assert(config.load(path, true, config_error));
+        assert(config.finalize(config_error));
+        assert(config.trust_root().empty());
+
+        write_config("https://mirror.example:45871\ntrust_root = http://example.com:45871\n");
+        assert(config.load(path, true, config_error));
+        assert(!config.finalize(config_error));
+        assert(config_error.find("trust_root must use https") != std::string::npos);
+
+        write_config("https://mirror.example:45871\ntrust_root = http://127.0.0.1:45871\n");
+        assert(config.load(path, true, config_error));
+        assert(config.finalize(config_error));
+        assert(config.trust_root() == "http://127.0.0.1:45871");
+
+        write_config("https://mirror.example:45871\ntrust_root = https://ptr.example:45871\n"
+                     "trust_root_access_key = abc\n");
+        assert(config.load(path, true, config_error));
+        assert(config.finalize(config_error));
+        assert(config.trust_root_access_key() == "abc");
+
         std::filesystem::remove_all(directory, ec);
+    }
+
+    {
+        // Update indices are immutable. A metadata slice that changes one is a
+        // fork or a corrupt trust root and must be rejected, not merged.
+        RepositoryMetadata stored;
+        RepositoryUpdate row;
+        row.index = 7;
+        row.hash = sha256("one");
+        row.begin = 100;
+        row.end = 200;
+        stored.updates[7].push_back(row);
+
+        std::string merge_error;
+        RepositoryMetadata identical = stored;
+        assert(stored.merge(identical, merge_error));
+        assert(stored.updates[7].size() == 1);
+
+        RepositoryMetadata rehashed = stored;
+        rehashed.updates[7][0].hash = sha256("two");
+        assert(!stored.merge(rehashed, merge_error));
+        assert(merge_error.find("index 7") != std::string::npos);
+        assert(merge_error.find("changed") != std::string::npos);
+
+        RepositoryMetadata reranged = stored;
+        reranged.updates[7][0].begin = 101;
+        assert(!stored.merge(reranged, merge_error));
     }
 
     {

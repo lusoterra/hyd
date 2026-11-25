@@ -144,6 +144,8 @@ def build_repository(mode):
 class Handler(BaseHTTPRequestHandler):
     repo = None
     metadata_bytes = None
+    corrupt_indices = set()
+    missing_indices = set()
 
     def log_message(self, fmt, *args):
         pass
@@ -174,6 +176,14 @@ class Handler(BaseHTTPRequestHandler):
 
         if parsed.path == "/update":
             digest = parse_qs(parsed.query).get("update_hash", [""])[0]
+            for index, hashes in self.repo.index_to_hashes.items():
+                if digest in hashes:
+                    if index in self.missing_indices:
+                        self.send_error(404)
+                        return
+                    if index in self.corrupt_indices:
+                        self._send(b"this is not the update you are looking for")
+                        return
             for _, update_hash, body, _ in self.repo.updates:
                 if update_hash == digest:
                     self._send(body)
@@ -188,10 +198,16 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=45871)
     parser.add_argument("--mode", choices=["initial", "incremental", "published", "future", "badhash", "knownbad"], default="initial")
+    parser.add_argument("--corrupt-index", type=int, action="append", default=[],
+                        help="serve a body that does not match its hash for this update index")
+    parser.add_argument("--missing-index", type=int, action="append", default=[],
+                        help="return 404 for this update index")
     args = parser.parse_args()
 
     repo, hashes = build_repository(args.mode)
     Handler.repo = repo
+    Handler.corrupt_indices = set(args.corrupt_index)
+    Handler.missing_indices = set(args.missing_index)
 
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     print(json.dumps({"port": args.port, "hashes": hashes, "updates": len(repo.updates)}), flush=True)

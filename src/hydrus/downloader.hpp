@@ -20,6 +20,9 @@ struct DownloadSummary
 {
     std::uint64_t bytes = 0;
     std::uint64_t files = 0;
+    // Files the download source could not supply or supplied with the wrong
+    // hash, and which were successfully fetched from the trust root instead.
+    std::uint64_t fallback_files = 0;
     bool stopped = false;
     std::string error;
 };

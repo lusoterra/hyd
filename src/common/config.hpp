@@ -41,6 +41,12 @@ public:
     int listen_port() const;
     std::string repository_url() const;
     std::string repository_access_key() const;
+
+    // The repository whose metadata (and therefore update hashes) is
+    // authoritative. Empty means "use repository_url for both metadata and
+    // update bytes", which is the pre-0.8.0 blind-trust behaviour.
+    std::string trust_root() const;
+    std::string trust_root_access_key() const;
     std::int64_t sync_interval_seconds() const;
     int partitions() const;
     std::uint64_t max_download_bytes() const;

@@ -12,6 +12,7 @@ namespace hyd {
 namespace {
 
 constexpr const char* kDefaultRepositoryUrl = "https://ptr.hydrus.network:45871";
+constexpr const char* kDefaultTrustRoot = kDefaultRepositoryUrl;
 constexpr const char* kDefaultRepositoryAccessKey =
     "4a285629721ca442541ef2c15ea17d1f7f7578b0c3f4f5f2a05f8f0ab297786f";
 // The current PTR corpus is roughly 21 GiB. A finite default stops a broken
@@ -96,6 +97,41 @@ bool is_loopback_host(const std::string& host)
     }
 
     return true;
+}
+
+bool validate_repository_url(const std::string& key, const std::string& url, std::string& error)
+{
+    if (url.empty())
+    {
+        error = key + " must not be empty";
+        return false;
+    }
+
+    std::string scheme;
+    std::string host;
+    if (!repository_url_scheme_and_host(url, scheme, host))
+    {
+        error = key + " must be an absolute URL such as https://ptr.hydrus.network:45871";
+        return false;
+    }
+
+    if (scheme == "https")
+    {
+        // Fine. TLS is the transport authentication the ecosystem relies on.
+        return true;
+    }
+
+    if (scheme == "http" && is_loopback_host(host))
+    {
+        HYD_LOGF(warn,
+            "%s %s is plain http on loopback; only use this for a local test repository",
+            key.c_str(), url.c_str());
+        return true;
+    }
+
+    error = key + " must use https (got " + scheme + "://" + host
+        + "); syncing over plain http lets a network attacker replace repository data";
+    return false;
 }
 
 std::string strip_inline_comment(const std::string& value)
@@ -251,38 +287,29 @@ bool Config::finalize(std::string& error)
         return false;
     }
 
-    if (repository_url().empty())
+    if (!validate_repository_url("repository_url", repository_url(), error))
     {
-        error = "repository_url must not be empty";
         return false;
     }
 
-    std::string repository_scheme;
-    std::string repository_host;
-    if (!repository_url_scheme_and_host(repository_url(), repository_scheme, repository_host))
+    // An empty trust_root is deliberate: it means the download source is also
+    // the metadata source (blind trust). A non-empty value must still be a
+    // sane repository URL.
+    if (!trust_root().empty()
+        && !validate_repository_url("trust_root", trust_root(), error))
     {
-        error = "repository_url must be an absolute URL such as "
-                "https://ptr.hydrus.network:45871";
         return false;
     }
 
-    if (repository_scheme == "https")
-    {
-        // Fine. TLS is the transport authentication the ecosystem relies on.
-    }
-    else if (repository_scheme == "http" && is_loopback_host(repository_host))
+    // Make the upgrade behaviour explicit: changing repository_url no longer
+    // changes who publishes the update hashes unless trust_root is cleared.
+    if (!values_.contains("trust_root") && repository_url() != kDefaultTrustRoot)
     {
         HYD_LOGF(warn,
-            "repository_url %s is plain http on loopback; only use this for a "
-            "local test repository",
+            "repository_url is %s but trust_root was not set; update hashes will "
+            "be verified against the official PTR. Set trust_root = (empty) to "
+            "trust repository_url for both metadata and update bytes.",
             repository_url().c_str());
-    }
-    else
-    {
-        error = "repository_url must use https (got " + repository_scheme + "://"
-            + repository_host + "); syncing over plain http lets a network "
-              "attacker replace repository data";
-        return false;
     }
 
     const auto max_download = parse_i64(get_string("max_download_bytes", ""));
@@ -372,6 +399,24 @@ std::string Config::repository_access_key() const
     return get_string("repository_access_key", kDefaultRepositoryAccessKey);
 }
 
+std::string Config::trust_root() const
+{
+    const auto iterator = values_.find("trust_root");
+    if (iterator == values_.end())
+    {
+        return kDefaultTrustRoot;
+    }
+
+    // An explicitly empty value disables split trust. get_string() cannot be
+    // used here because it folds an empty value into the fallback.
+    return iterator->second;
+}
+
+std::string Config::trust_root_access_key() const
+{
+    return get_string("trust_root_access_key", repository_access_key());
+}
+
 std::int64_t Config::sync_interval_seconds() const
 {
     return get_int("sync_interval_seconds", 3600);
@@ -406,7 +451,21 @@ void Config::dump_effective() const
     HYD_LOGF(info, "config file: %s", path_.string().c_str());
     HYD_LOGF(info, "data_dir: %s", data_dir_.string().c_str());
     HYD_LOGF(info, "listen: %s:%d", listen_address().c_str(), listen_port());
-    HYD_LOGF(info, "repository: %s", repository_url().c_str());
+    HYD_LOGF(info, "repository (downloads): %s", repository_url().c_str());
+    const auto trust = trust_root();
+    if (trust.empty())
+    {
+        HYD_LOGF(info, "trust_root: (empty; trusting repository_url for metadata and downloads)");
+    }
+    else if (trust == repository_url())
+    {
+        HYD_LOGF(info, "trust_root: %s (same as repository_url)", trust.c_str());
+    }
+    else
+    {
+        HYD_LOGF(info, "trust_root: %s (update hashes come from here; downloads come from %s)",
+            trust.c_str(), repository_url().c_str());
+    }
     HYD_LOGF(info, "sync_enabled: %s", get_bool("sync_enabled", true) ? "true" : "false");
     HYD_LOGF(info, "sync_on_start: %s", get_bool("sync_on_start", true) ? "true" : "false");
     HYD_LOGF(info, "sync_interval_seconds: %lld", static_cast<long long>(sync_interval_seconds()));
@@ -432,6 +491,11 @@ void Config::dump_effective() const
     HYD_LOGF(info, "log_level: %s", get_string("log_level", "info").c_str());
     HYD_LOGF(info, "log_file: %s", get_string("log_file", "(stderr only)").c_str());
     HYD_LOGF(info, "repository_access_key: %s", repository_access_key().empty() ? "(none)" : "(set)");
+    if (!trust.empty() && trust != repository_url())
+    {
+        HYD_LOGF(info, "trust_root_access_key: %s",
+            trust_root_access_key().empty() ? "(none)" : "(set)");
+    }
 }
 
 } // namespace hyd

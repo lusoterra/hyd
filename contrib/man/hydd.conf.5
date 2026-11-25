@@ -47,13 +47,34 @@ Human-readable tag service name. Default
 .IR "public tag repository" .
 .TP
 .B repository_url ", " repository_access_key
-Upstream Hydrus repository. The defaults are the real PTR and its shared
-read-only key. The URL must use
+Where update files are downloaded from. The defaults are the real PTR and its
+shared read-only key. The URL must use
 .IR https ;
 plain
 .I http
 is accepted only when the host is loopback, which is useful for a local test
 repository. Syncing over plain HTTP to any other host is refused.
+.TP
+.B trust_root ", " trust_root_access_key
+The repository whose metadata is authoritative for update hashes. Defaults to
+the real PTR. When
+.B repository_url
+points at a mirror, hydd fetches the small metadata slice from
+.B trust_root
+and checks every downloaded update file against the SHA-256 it lists.
+A file that the mirror does not have yet is fetched from
+.B trust_root
+instead and the sync continues. A file whose hash does not match is not
+cached: the sync aborts with an error telling the operator to switch
+.BR repository_url ,
+because the download source may be corrupt or compromised. A trust root that
+changes the hash or time range of an update index it already published also
+aborts the sync instead of mixing two histories. Set
+.B trust_root
+to an empty value to trust
+.B repository_url
+for both metadata and update bytes. The key defaults to
+.BR repository_access_key .
 .TP
 .B sync_enabled
 Enable or disable all repository syncing. Default true.

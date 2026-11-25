@@ -59,19 +59,49 @@ std::vector<RepositoryUpdate> RepositoryMetadata::all_updates_ordered() const
     return result;
 }
 
-void RepositoryMetadata::merge(const RepositoryMetadata& other)
+bool RepositoryMetadata::merge(const RepositoryMetadata& other, std::string& error)
 {
     for (const auto& [index, rows] : other.updates)
     {
-        auto& target = updates[index];
+        const auto existing = updates.find(index);
+        if (existing == updates.end())
+        {
+            updates[index] = rows;
+            continue;
+        }
+
+        const auto& target = existing->second;
+
+        std::vector<Hash> stored_hashes;
+        stored_hashes.reserve(target.size());
+        for (const auto& row : target)
+        {
+            stored_hashes.push_back(row.hash);
+        }
+
+        std::vector<Hash> incoming_hashes;
+        incoming_hashes.reserve(rows.size());
         for (const auto& row : rows)
         {
-            const bool duplicate = std::any_of(target.begin(), target.end(),
-                [&row](const RepositoryUpdate& existing) { return existing.hash == row.hash; });
-            if (!duplicate)
-            {
-                target.push_back(row);
-            }
+            incoming_hashes.push_back(row.hash);
+        }
+
+        std::sort(stored_hashes.begin(), stored_hashes.end());
+        std::sort(incoming_hashes.begin(), incoming_hashes.end());
+
+        const bool same_hashes = stored_hashes == incoming_hashes;
+        const bool same_range = target.size() == rows.size()
+            && (target.empty()
+                || (target.front().begin == rows.front().begin
+                    && target.front().end == rows.front().end));
+
+        if (!same_hashes || !same_range)
+        {
+            error = "repository metadata for update index " + std::to_string(index)
+                + " changed; refusing to mix two versions of history. The trust root "
+                  "is inconsistent or is a different repository. Use a fresh data_dir "
+                  "or point trust_root at the repository you actually trust.";
+            return false;
         }
     }
 
@@ -79,6 +109,8 @@ void RepositoryMetadata::merge(const RepositoryMetadata& other)
     {
         next_update_due = other.next_update_due;
     }
+
+    return true;
 }
 
 RepositoryClient::RepositoryClient(std::string base_url, std::string access_key)
@@ -99,7 +131,7 @@ bool RepositoryClient::fetch_metadata(std::int64_t since, RepositoryMetadata& me
     return parse_repository_metadata_bytes(response.body, metadata, error);
 }
 
-bool RepositoryClient::fetch_update(const Hash& hash, Bytes& compressed_body, std::string& error)
+UpdateFetchResult RepositoryClient::fetch_update(const Hash& hash, Bytes& compressed_body, std::string& error)
 {
     http_.set_max_body_bytes(kMaxUpdateFileBytes);
 
@@ -107,18 +139,18 @@ bool RepositoryClient::fetch_update(const Hash& hash, Bytes& compressed_body, st
     HttpResponse response;
     if (!http_.get(path, response, error))
     {
-        return false;
+        return UpdateFetchResult::error;
     }
 
     const Hash actual = sha256(response.body);
     if (actual != hash)
     {
         error = "update sha256 mismatch: expected " + hex_encode(hash) + ", got " + hex_encode(actual);
-        return false;
+        return UpdateFetchResult::hash_mismatch;
     }
 
     compressed_body = std::move(response.body);
-    return true;
+    return UpdateFetchResult::ok;
 }
 
 bool parse_repository_metadata_bytes(std::span<const std::uint8_t> compressed, RepositoryMetadata& metadata, std::string& error)
@@ -270,7 +302,10 @@ bool parse_repository_metadata_json(std::string_view json_text, RepositoryMetada
             }
         }
 
-        metadata.merge(parsed);
+        if (!metadata.merge(parsed, error))
+        {
+            return false;
+        }
         return true;
     }
     catch (const std::exception& exception)

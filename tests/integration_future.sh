@@ -32,6 +32,7 @@ listen_address = 127.0.0.1
 listen_port = ${PORT_API}
 repository_url = http://127.0.0.1:${PORT_REPO}
 repository_access_key = 1111111111111111111111111111111111111111111111111111111111111111
+trust_root =
 access_key = 2222222222222222222222222222222222222222222222222222222222222222
 partitions = 4
 sync_interval_seconds = 3600
