@@ -519,7 +519,6 @@ std::string render_stats(const nlohmann::json& health, const nlohmann::json* api
     if (const auto compaction = health.find("compaction");
         compaction != health.end() && compaction->is_object())
     {
-        const bool enabled = compaction->value("enabled", false);
         const auto threshold_bytes = get_u64(*compaction, "threshold_bytes").value_or(0);
         const auto delta_bytes = get_u64(*compaction, "delta_bytes").value_or(0);
 
@@ -534,15 +533,7 @@ std::string render_stats(const nlohmann::json& health, const nlohmann::json* api
         else
         {
             add_row(out, "Delta size", format_bytes(delta_bytes));
-        }
-
-        if (!enabled)
-        {
-            add_row(out, "Compaction", "disabled");
-        }
-        else if (threshold_bytes == 0)
-        {
-            add_row(out, "Compaction", "disabled (no size threshold)");
+            add_row(out, "Compaction", "manual (no size threshold)");
         }
 
         if (const auto last = get_i64(*compaction, "last_compacted_at");

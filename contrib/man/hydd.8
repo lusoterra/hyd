@@ -179,9 +179,13 @@ Background sync policy.
 Custom-store partition count; must be a power of two. More partitions use less
 RAM during the initial build but make more passes over the update files.
 .TP
-.B compaction_enabled ", " compact_after_delta_mb
-Whether and when to merge the delta journal into the base store. Compaction
-is enabled by default and never drops live data.
+.B compact_after_delta_mb
+Delta size that triggers automatic compaction into the base store. Default
+512; zero disables the automatic threshold and leaves compaction to
+.BR "hydd \-\-compact" .
+Compaction is always enabled and never drops live data.
+.I compaction_enabled
+was removed in 0.8.0 and is ignored with a warning if present.
 .TP
 .B keep_update_cache
 Keep downloaded update files after the initial build. Default false.

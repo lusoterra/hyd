@@ -329,7 +329,6 @@ int main()
             { "delta_records", 0 },
             { "delta_hashes", 0 },
             { "compaction", {
-                { "enabled", true },
                 { "threshold_mb", 512 },
                 { "threshold_bytes", 536870912 },
                 { "delta_bytes", 187695104 },

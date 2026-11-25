@@ -98,10 +98,11 @@ Fields:
 - `hashes`, `mappings`, `tags`, `siblings`, `parents`, `legacy_hashes`,
   `sha256_hashes`, `partitions`, `delta_records`, `delta_hashes`, `backend` -
   live store totals, present when the store is open.
-- `compaction` - `enabled` (`compaction_enabled`), `threshold_mb` and
-  `threshold_bytes` (`compact_after_delta_mb`), `delta_bytes` (current delta
-  journal size), `percent` of the threshold, and `last_compacted_at` (Unix time
-  or 0). This is the same byte count the automatic trigger uses.
+- `compaction` - `threshold_mb` and `threshold_bytes`
+  (`compact_after_delta_mb`), `delta_bytes` (current delta journal size),
+  `percent` of the threshold, and `last_compacted_at` (Unix time or 0). This is
+  the same byte count the automatic trigger uses. Compaction is always enabled;
+  `compaction_enabled` was removed in 0.8.0.
 - `build` - present while an initial build runs: `active`, `phase`
   (`definitions`, `partitions`, `idle`), `partition`, `partitions`,
   `files_done`, `files_total`, `bytes_done`, `bytes_total`, `hashes`,

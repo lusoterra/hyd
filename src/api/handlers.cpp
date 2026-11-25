@@ -1553,7 +1553,6 @@ nlohmann::json ApiHandlers::health_json() const
             : 0ull;
         const auto delta_bytes = delta_bytes_on_disk(config_);
         body["compaction"] = {
-            { "enabled", config_.get_bool("compaction_enabled", true) },
             { "threshold_mb", threshold_mb },
             { "threshold_bytes", threshold_bytes },
             { "delta_bytes", delta_bytes },

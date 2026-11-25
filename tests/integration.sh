@@ -169,7 +169,7 @@ assert f["seeding"]["enabled"] is True
 assert f["tag_counts"]["counts_bytes"] > 0 and f["tag_counts"]["lookup_bytes"] > 0
 assert f["tag_counts"]["bytes"] == f["tag_counts"]["counts_bytes"] + f["tag_counts"]["lookup_bytes"]
 c = doc["compaction"]
-assert c["enabled"] is True and c["threshold_mb"] == 512
+assert c["threshold_mb"] == 512
 assert c["threshold_bytes"] == 512 * 1024 * 1024
 assert c["delta_bytes"] >= 0 and 0 <= c["percent"] < 100
 PY

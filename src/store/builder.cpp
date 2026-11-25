@@ -2880,7 +2880,7 @@ bool sync_repository(const Config& config, const SyncCallbacks& callbacks, bool&
         callbacks.on_store_ready();
     }
 
-    if (state.built && config.get_bool("compaction_enabled", true))
+    if (state.built)
     {
         const auto threshold_mb = config.get_int("compact_after_delta_mb", 512);
         if (threshold_mb > 0

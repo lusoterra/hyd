@@ -42,8 +42,9 @@ no network access. See `tests/integration.sh`.
   repository or the local store in response to a request.
 - Keep the default config at `/etc/hydd.conf`, the default data directory at
   `/var/lib/hyd`, and the daemon running as an unprivileged user.
-- Compaction is enabled by default. It must never discard live tags or
-  mappings; users can disable it with `compaction_enabled = false`.
+- Compaction always runs when the delta journal reaches
+  `compact_after_delta_mb`. It must never discard live tags or mappings.
+  `compaction_enabled` was removed in 0.8.0 and must not be reintroduced.
 - The custom columnar store is the only supported backend. Do not reintroduce
   the removed SQLite mirror without a deliberate migration and format design.
 - The initial build checkpoints after the definitions pass and after each

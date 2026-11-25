@@ -214,6 +214,13 @@ void Config::apply_command_line_overrides(
 
 bool Config::finalize(std::string& error)
 {
+    if (values_.contains("compaction_enabled"))
+    {
+        HYD_LOG(warn,
+            "compaction_enabled is no longer supported; compaction always runs when "
+            "the delta reaches compact_after_delta_mb");
+    }
+
     data_dir_ = get_string("data_dir", "/var/lib/hyd");
     if (data_dir_.is_relative())
     {
