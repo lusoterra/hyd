@@ -90,7 +90,9 @@ Fields:
   `delta_generation` - sync state persisted by the daemon.
 - `sync_enabled`, `sync_interval_seconds`, `next_check_at`,
   `data_age_seconds`, `update_overdue_seconds`,
-  `estimated_update_applied_at` - scheduling information.
+  `estimated_update_applied_at` - scheduling information. The last is an
+  estimate that assumes the PTR publishes on schedule and polling stays
+  regular.
 - `store_open`, `hash_count`, `mapping_count`, `tag_count` - counts reported by
   the last sync pass.
 - `hashes`, `mappings`, `tags`, `siblings`, `parents`, `legacy_hashes`,

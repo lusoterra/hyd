@@ -67,9 +67,17 @@ rejected as ambiguous; write
 to force the file interpretation.
 .TP
 .B hyd stats
-Print repository statistics, sync state, live build progress, and an estimate
-of when the next PTR update will be applied. Equivalent to
+Print repository statistics, sync state, live build progress, compaction
+state (current delta size against
+.B compact_after_delta_mb
+and the last compaction time), derived-file sizes, and an estimate of when
+the next PTR update will be applied. Equivalent to
 .BR "hydd \-\-stats" .
+The
+.I Expected applied
+time is approximate: it assumes the PTR publishes on its normal schedule and
+this daemon keeps polling regularly. A delay in either moves the real
+application time.
 .TP
 .BI "hyd counts " TAG ...
 Ask the running API for the exact current mapping count of each storage tag.

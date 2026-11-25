@@ -371,6 +371,9 @@ int main()
         assert(stats.find("Delta size") != std::string::npos);
         assert(stats.find("179.00 MiB / 512.00 MiB (35%)") != std::string::npos);
         assert(stats.find("Compacted") != std::string::npos);
+        assert(stats.find("ready, 660.00 MiB, 54.98M tags, delta applied") != std::string::npos);
+        assert(stats.find("ready, 18.00 GiB") != std::string::npos);
+        assert(stats.find("expected applied assumes") == std::string::npos);
         assert(stats.find("counts.bin") != std::string::npos);
         assert(stats.find("tag_lookup.bin") != std::string::npos);
         assert(stats.find("tag_postings.bin") != std::string::npos);

@@ -115,6 +115,31 @@ std::string count_value(std::uint64_t value)
     return out.str() + " (" + commas(value) + ")";
 }
 
+std::string count_short(std::uint64_t value)
+{
+    std::ostringstream out;
+    if (value >= 1000000000ull)
+    {
+        out << std::fixed << std::setprecision(2)
+            << static_cast<double>(value) / 1000000000.0 << "B";
+    }
+    else if (value >= 1000000ull)
+    {
+        out << std::fixed << std::setprecision(2)
+            << static_cast<double>(value) / 1000000.0 << "M";
+    }
+    else if (value >= 1000ull)
+    {
+        out << std::fixed << std::setprecision(2)
+            << static_cast<double>(value) / 1000.0 << "K";
+    }
+    else
+    {
+        return commas(value);
+    }
+    return out.str();
+}
+
 std::string utc_time(std::int64_t timestamp)
 {
     const std::time_t time = static_cast<std::time_t>(timestamp);
@@ -557,18 +582,17 @@ std::string render_stats(const nlohmann::json& health, const nlohmann::json* api
             }
 
             const bool enabled = iterator->value("enabled", false);
-            std::string value = enabled ? "enabled" : "disabled";
-            if (enabled && show_ready)
+            std::string value;
+            if (!enabled)
+            {
+                value = "disabled";
+            }
+            else if (show_ready)
             {
                 const bool ready = iterator->value("ready", false);
-                value += ready ? ", ready" : ", building";
+                value = ready ? "ready" : "building";
                 if (ready)
                 {
-                    if (const auto as_of = iterator->value("as_of", static_cast<std::int64_t>(0));
-                        as_of > 0)
-                    {
-                        value += " (built " + utc_time(as_of) + ")";
-                    }
                     if (const auto bytes = iterator->value("bytes", static_cast<std::uint64_t>(0));
                         bytes > 0)
                     {
@@ -580,13 +604,17 @@ std::string render_stats(const nlohmann::json& health, const nlohmann::json* api
                                 "defined_tags", static_cast<std::uint64_t>(0));
                             tags > 0)
                         {
-                            value += ", " + commas(tags) + " tags";
+                            value += ", " + count_short(tags) + " tags";
                         }
                         value += iterator->value("delta_applied", false)
                             ? ", delta applied"
                             : ", delta pending";
                     }
                 }
+            }
+            else
+            {
+                value = "enabled";
             }
             add_row(out, label, value);
         };
@@ -630,12 +658,6 @@ std::string render_stats(const nlohmann::json& health, const nlohmann::json* api
     {
         out << "\n  note: some fields are unavailable from this daemon version; "
                "upgrade hydd for a complete report\n";
-    }
-
-    if (built && store_open && get_i64(health, "estimated_update_applied_at").value_or(0) > 0)
-    {
-        out << "\n  note: expected applied assumes the PTR publishes on schedule "
-               "and polling stays regular\n";
     }
 
     return out.str();
