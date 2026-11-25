@@ -73,8 +73,10 @@ missing or corrupt entries, and exit. Requires
 .TP
 .B \-\-stats
 Query the running local API and print repository statistics, sync state,
-live initial-build progress, and an estimate of when the next PTR update
-will be applied. Does not need root or access to the data directory.
+live initial-build progress, compaction state (current delta size against the
+configured threshold, last compaction time), derived-file sizes, and an
+estimate of when the next PTR update will be applied. Does not need root or
+access to the data directory.
 .TP
 .B \-\-rebuild\-tag\-counts
 Rebuild the derived tag counts

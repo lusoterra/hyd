@@ -508,6 +508,42 @@ std::string render_stats(const nlohmann::json& health, const nlohmann::json* api
         add_row(out, "Delta", value);
     }
 
+    if (const auto compaction = health.find("compaction");
+        compaction != health.end() && compaction->is_object())
+    {
+        const bool enabled = compaction->value("enabled", false);
+        const auto threshold_bytes = get_u64(*compaction, "threshold_bytes").value_or(0);
+        const auto delta_bytes = get_u64(*compaction, "delta_bytes").value_or(0);
+
+        if (threshold_bytes > 0)
+        {
+            std::ostringstream size;
+            size << format_bytes(delta_bytes) << " / " << format_bytes(threshold_bytes)
+                 << " (" << std::fixed << std::setprecision(0)
+                 << compaction->value("percent", 0.0) << "%)";
+            add_row(out, "Delta size", size.str());
+        }
+        else
+        {
+            add_row(out, "Delta size", format_bytes(delta_bytes));
+        }
+
+        if (!enabled)
+        {
+            add_row(out, "Compaction", "disabled");
+        }
+        else if (threshold_bytes == 0)
+        {
+            add_row(out, "Compaction", "disabled (no size threshold)");
+        }
+
+        if (const auto last = get_i64(*compaction, "last_compacted_at");
+            last && *last > 0)
+        {
+            add_row(out, "Compacted", utc_time(*last));
+        }
+    }
+
     if (const auto features = health.find("features");
         features != health.end() && features->is_object())
     {
@@ -555,9 +591,26 @@ std::string render_stats(const nlohmann::json& health, const nlohmann::json* api
             add_row(out, label, value);
         };
 
+        auto add_component = [&](const char* label, const char* feature, const char* field) {
+            const auto feature_iterator = features->find(feature);
+            if (feature_iterator == features->end() || !feature_iterator->is_object())
+            {
+                return;
+            }
+            const auto bytes = get_u64(*feature_iterator, field).value_or(0);
+            if (bytes > 0)
+            {
+                add_row(out, label, format_bytes(bytes));
+            }
+        };
+
         add_feature("Seeding", "seeding", false, false);
         add_feature("Tag counts", "tag_counts", true, true);
+        add_component("counts.bin", "tag_counts", "counts_bytes");
+        add_component("tag_lookup.bin", "tag_counts", "lookup_bytes");
         add_feature("Reverse lookup", "tag_hashes", true, false);
+        add_component("tag_postings.bin", "tag_hashes", "postings_bytes");
+        add_component("hash_index.bin", "tag_hashes", "hash_index_bytes");
     }
 
     if (!built)

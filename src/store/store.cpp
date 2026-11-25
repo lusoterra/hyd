@@ -910,7 +910,17 @@ std::uint64_t Store::tag_counts_defined_tags() const
 
 std::uint64_t Store::tag_counts_size_bytes() const
 {
+    return tag_counts_data_bytes() + tag_counts_lookup_bytes();
+}
+
+std::uint64_t Store::tag_counts_data_bytes() const
+{
     return impl_->counts.data() != nullptr ? impl_->counts.size() : 0;
+}
+
+std::uint64_t Store::tag_counts_lookup_bytes() const
+{
+    return impl_->tag_lookup.data() != nullptr ? impl_->tag_lookup.size() : 0;
 }
 
 bool Store::tag_counts_delta_applied() const
@@ -978,16 +988,17 @@ std::int64_t Store::tag_hashes_built_at() const
 
 std::uint64_t Store::tag_hashes_size_bytes() const
 {
-    std::uint64_t size = 0;
-    if (impl_->postings_offsets != nullptr)
-    {
-        size += impl_->postings.size();
-    }
-    if (impl_->hash_index_entries != nullptr)
-    {
-        size += impl_->hash_index.size();
-    }
-    return size;
+    return tag_hashes_postings_bytes() + tag_hashes_index_bytes();
+}
+
+std::uint64_t Store::tag_hashes_postings_bytes() const
+{
+    return impl_->postings_offsets != nullptr ? impl_->postings.size() : 0;
+}
+
+std::uint64_t Store::tag_hashes_index_bytes() const
+{
+    return impl_->hash_index_entries != nullptr ? impl_->hash_index.size() : 0;
 }
 
 std::optional<std::uint32_t> Store::resolve_tag_id(std::string_view tag) const

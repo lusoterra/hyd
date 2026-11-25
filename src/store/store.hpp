@@ -68,12 +68,16 @@ public:
     std::int64_t tag_counts_built_at() const override;
     std::uint64_t tag_counts_defined_tags() const override;
     std::uint64_t tag_counts_size_bytes() const override;
+    std::uint64_t tag_counts_data_bytes() const override;
+    std::uint64_t tag_counts_lookup_bytes() const override;
     bool tag_counts_delta_applied() const override;
     void compute_count_overlay() const override;
 
     bool has_tag_hashes() const override;
     std::int64_t tag_hashes_built_at() const override;
     std::uint64_t tag_hashes_size_bytes() const override;
+    std::uint64_t tag_hashes_postings_bytes() const override;
+    std::uint64_t tag_hashes_index_bytes() const override;
     std::optional<TagHashesPage> tag_hashes(const TagHashesQuery& query,
         std::uint64_t offset, std::uint32_t limit,
         std::optional<std::uint32_t> after = std::nullopt) const override;

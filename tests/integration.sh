@@ -160,16 +160,26 @@ curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
     "http://127.0.0.1:${PORT_API}/hyd/stats" > "${WORK}/stats.json"
 python3 - "${WORK}/stats.json" <<'PY'
 import json, sys
-f = json.load(open(sys.argv[1]))["features"]
+doc = json.load(open(sys.argv[1]))
+f = doc["features"]
 assert f["tag_counts"]["enabled"] is True and f["tag_counts"]["ready"] is True
 assert f["tag_counts"]["delta_applied"] is True
 assert f["tag_hashes"]["enabled"] is False and f["tag_hashes"]["ready"] is False
 assert f["seeding"]["enabled"] is True
+assert f["tag_counts"]["counts_bytes"] > 0 and f["tag_counts"]["lookup_bytes"] > 0
+assert f["tag_counts"]["bytes"] == f["tag_counts"]["counts_bytes"] + f["tag_counts"]["lookup_bytes"]
+c = doc["compaction"]
+assert c["enabled"] is True and c["threshold_mb"] == 512
+assert c["threshold_bytes"] == 512 * 1024 * 1024
+assert c["delta_bytes"] >= 0 and 0 <= c["percent"] < 100
 PY
 STATS_TEXT=$("${BIN}" -c "${WORK}/hydd.conf" --stats)
 printf '%s\n' "${STATS_TEXT}" | grep -q 'Tag counts'
 printf '%s\n' "${STATS_TEXT}" | grep -q 'Reverse lookup'
 printf '%s\n' "${STATS_TEXT}" | grep -q 'Seeding'
+printf '%s\n' "${STATS_TEXT}" | grep -q 'Delta size'
+printf '%s\n' "${STATS_TEXT}" | grep -q 'counts.bin'
+printf '%s\n' "${STATS_TEXT}" | grep -q 'tag_lookup.bin'
 # The old top-level /stats extension path is gone; /health stays for Hydrus.
 [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT_API}/stats")" = "404" ]
 curl -s "http://127.0.0.1:${PORT_API}/health" | grep -q '"built":true'
@@ -443,9 +453,12 @@ curl -s -H "Hydrus-Client-API-Access-Key: ${KEY}" \
     "${RBASE}/hyd/stats" > "${WORK}/reverse-stats.json"
 python3 - "${WORK}/reverse-stats.json" <<'PY'
 import json, sys
-f = json.load(open(sys.argv[1]))["features"]
+doc = json.load(open(sys.argv[1]))
+f = doc["features"]
 assert f["tag_hashes"]["enabled"] is True and f["tag_hashes"]["ready"] is True
 assert f["tag_hashes"]["bytes"] > 0 and f["tag_hashes"]["as_of"] > 0
+assert f["tag_hashes"]["postings_bytes"] > 0 and f["tag_hashes"]["hash_index_bytes"] > 0
+assert f["tag_hashes"]["bytes"] == f["tag_hashes"]["postings_bytes"] + f["tag_hashes"]["hash_index_bytes"]
 assert f["tag_counts"]["ready"] is True
 PY
 [ "$(curl -s -o /dev/null -w '%{http_code}' \

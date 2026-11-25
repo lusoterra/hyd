@@ -228,7 +228,7 @@ Raw JSON, including feature readiness:
 
 ```sh
 curl -s -H "Hydrus-Client-API-Access-Key: $KEY" "$BASE/hyd/stats" \
-  | jq '{built, hashes, mappings, tags, features}'
+  | jq '{built, hashes, mappings, tags, compaction, features}'
 ```
 
 `/health` is the unauthenticated build/sync status; `/hyd/stats` returns the

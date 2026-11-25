@@ -77,7 +77,11 @@ startup memory over time.
 .TP
 .B compact_after_delta_mb
 Delta size that triggers automatic compaction. Zero disables the threshold.
-Default 512.
+Default 512. The current delta size, threshold percentage, and last compaction
+time are reported by
+.B hydd --stats
+and
+.BR /hyd/stats .
 .TP
 .B keep_update_cache
 Keep downloaded update files after a successful initial build. Default false.

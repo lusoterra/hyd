@@ -1547,6 +1547,22 @@ nlohmann::json ApiHandlers::health_json() const
             body["backend"] = store->backend_name();
         }
 
+        const auto threshold_mb = config_.get_int("compact_after_delta_mb", 512);
+        const auto threshold_bytes = threshold_mb > 0
+            ? static_cast<std::uint64_t>(threshold_mb) * 1024ull * 1024ull
+            : 0ull;
+        const auto delta_bytes = delta_bytes_on_disk(config_);
+        body["compaction"] = {
+            { "enabled", config_.get_bool("compaction_enabled", true) },
+            { "threshold_mb", threshold_mb },
+            { "threshold_bytes", threshold_bytes },
+            { "delta_bytes", delta_bytes },
+            { "percent", threshold_bytes > 0
+                ? 100.0 * static_cast<double>(delta_bytes) / static_cast<double>(threshold_bytes)
+                : 0.0 },
+            { "last_compacted_at", sync_state_.last_compacted_at },
+        };
+
         nlohmann::json features = nlohmann::json::object();
         features["seeding"] = {
             { "enabled", config_.get_bool("keep_update_cache", false) },
@@ -1556,6 +1572,8 @@ nlohmann::json ApiHandlers::health_json() const
             { "ready", store && store->has_tag_counts() },
             { "defined_tags", store ? store->tag_counts_defined_tags() : 0 },
             { "bytes", store ? store->tag_counts_size_bytes() : 0 },
+            { "counts_bytes", store ? store->tag_counts_data_bytes() : 0 },
+            { "lookup_bytes", store ? store->tag_counts_lookup_bytes() : 0 },
             { "as_of", store ? store->tag_counts_built_at() : 0 },
             { "delta_applied", store && store->tag_counts_delta_applied() },
         };
@@ -1563,6 +1581,8 @@ nlohmann::json ApiHandlers::health_json() const
             { "enabled", config_.get_bool("tag_hashes_enabled", false) },
             { "ready", store && store->has_tag_hashes() },
             { "bytes", store ? store->tag_hashes_size_bytes() : 0 },
+            { "postings_bytes", store ? store->tag_hashes_postings_bytes() : 0 },
+            { "hash_index_bytes", store ? store->tag_hashes_index_bytes() : 0 },
             { "as_of", store ? store->tag_hashes_built_at() : 0 },
         };
         body["features"] = std::move(features);

@@ -328,6 +328,34 @@ int main()
             { "parents", 41873 },
             { "delta_records", 0 },
             { "delta_hashes", 0 },
+            { "compaction", {
+                { "enabled", true },
+                { "threshold_mb", 512 },
+                { "threshold_bytes", 536870912 },
+                { "delta_bytes", 187695104 },
+                { "percent", 34.96 },
+                { "last_compacted_at", now - 7200 },
+            } },
+            { "features", {
+                { "tag_counts", {
+                    { "enabled", true },
+                    { "ready", true },
+                    { "bytes", 692060160 },
+                    { "counts_bytes", 230686720 },
+                    { "lookup_bytes", 461373440 },
+                    { "defined_tags", 54975491 },
+                    { "as_of", now - 100 },
+                    { "delta_applied", true },
+                } },
+                { "tag_hashes", {
+                    { "enabled", true },
+                    { "ready", true },
+                    { "bytes", 19327352832ull },
+                    { "postings_bytes", 18253611008ull },
+                    { "hash_index_bytes", 1073741824ull },
+                    { "as_of", now - 100 },
+                } },
+            } },
         };
 
         const auto stats = render_stats(health, nullptr, "http://127.0.0.1:45869", "fallback");
@@ -340,6 +368,13 @@ int main()
         assert(stats.find("PTR update due") != std::string::npos);
         assert(stats.find("Next check") != std::string::npos);
         assert(stats.find("Expected applied") != std::string::npos);
+        assert(stats.find("Delta size") != std::string::npos);
+        assert(stats.find("179.00 MiB / 512.00 MiB (35%)") != std::string::npos);
+        assert(stats.find("Compacted") != std::string::npos);
+        assert(stats.find("counts.bin") != std::string::npos);
+        assert(stats.find("tag_lookup.bin") != std::string::npos);
+        assert(stats.find("tag_postings.bin") != std::string::npos);
+        assert(stats.find("hash_index.bin") != std::string::npos);
     }
 
     {

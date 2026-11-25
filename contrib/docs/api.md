@@ -96,14 +96,24 @@ Fields:
 - `hashes`, `mappings`, `tags`, `siblings`, `parents`, `legacy_hashes`,
   `sha256_hashes`, `partitions`, `delta_records`, `delta_hashes`, `backend` -
   live store totals, present when the store is open.
+- `compaction` - `enabled` (`compaction_enabled`), `threshold_mb` and
+  `threshold_bytes` (`compact_after_delta_mb`), `delta_bytes` (current delta
+  journal size), `percent` of the threshold, and `last_compacted_at` (Unix time
+  or 0). This is the same byte count the automatic trigger uses.
 - `build` - present while an initial build runs: `active`, `phase`
   (`definitions`, `partitions`, `idle`), `partition`, `partitions`,
   `files_done`, `files_total`, `bytes_done`, `bytes_total`, `hashes`,
   `mappings`, `percent`, `bytes_percent`, `started_at`, `updated_at`,
   `elapsed_seconds`, `phase_elapsed_seconds`, `eta_seconds`.
-- `features` - `seeding.enabled`, `tag_counts.{enabled,ready,delta_applied,
-  defined_tags,bytes,as_of}`, `tag_hashes.{enabled,ready,bytes,as_of}`. No keys,
-  hashes, or tags are exposed.
+- `features` - `seeding.enabled`;
+  `tag_counts.{enabled,ready,delta_applied,defined_tags,bytes,counts_bytes,
+  lookup_bytes,as_of}` where `bytes` is `counts.bin` plus `tag_lookup.bin`;
+  `tag_hashes.{enabled,ready,bytes,postings_bytes,hash_index_bytes,as_of}`
+  where `bytes` is `tag_postings.bin` plus `hash_index.bin`. No keys, hashes,
+  or tags are exposed.
+
+`hyd stats` renders the same fields, including `Delta size`, `Compacted`, and
+the per-file sizes.
 
 ## GET /hyd/stats
 

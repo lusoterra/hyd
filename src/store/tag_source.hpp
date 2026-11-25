@@ -73,6 +73,8 @@ public:
     virtual std::int64_t tag_counts_built_at() const { return 0; }
     virtual std::uint64_t tag_counts_defined_tags() const { return 0; }
     virtual std::uint64_t tag_counts_size_bytes() const { return 0; }
+    virtual std::uint64_t tag_counts_data_bytes() const { return 0; }
+    virtual std::uint64_t tag_counts_lookup_bytes() const { return 0; }
     virtual bool tag_counts_delta_applied() const { return false; }
     virtual void compute_count_overlay() const {}
 
@@ -81,6 +83,8 @@ public:
     virtual bool has_tag_hashes() const { return false; }
     virtual std::int64_t tag_hashes_built_at() const { return 0; }
     virtual std::uint64_t tag_hashes_size_bytes() const { return 0; }
+    virtual std::uint64_t tag_hashes_postings_bytes() const { return 0; }
+    virtual std::uint64_t tag_hashes_index_bytes() const { return 0; }
     virtual std::optional<TagHashesPage> tag_hashes(const TagHashesQuery& query,
         std::uint64_t offset, std::uint32_t limit,
         std::optional<std::uint32_t> after = std::nullopt) const
