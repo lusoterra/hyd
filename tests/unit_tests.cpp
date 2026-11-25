@@ -358,7 +358,7 @@ int main()
             } },
         };
 
-        const auto stats = render_stats(health, nullptr, "http://127.0.0.1:45869", "fallback");
+        const auto stats = render_stats(health, nullptr, "http://127.0.0.1:45869");
         assert(stats.find("206.15 million (206,154,408)") != std::string::npos);
         assert(stats.find("54.98 million (54,975,491)") != std::string::npos);
         assert(stats.find("4.18 billion (4,181,606,107)") != std::string::npos);
@@ -393,7 +393,7 @@ int main()
         const nlohmann::json api_version = { { "hyd_version", "0.3.0" } };
 
         const auto stats = render_stats(
-            old_health, &api_version, "http://127.0.0.1:45869", "fallback");
+            old_health, &api_version, "http://127.0.0.1:45869");
         assert(stats.find("1.00 million (1,000,000)") != std::string::npos);
         assert(stats.find("0.3.0") != std::string::npos);
         assert(stats.find("some fields are unavailable") != std::string::npos);
@@ -423,7 +423,7 @@ int main()
         };
 
         const auto stats = render_stats(
-            building, nullptr, "http://127.0.0.1:45869", "fallback");
+            building, nullptr, "http://127.0.0.1:45869");
         assert(stats.find("building initial store") != std::string::npos);
         assert(stats.find("partitions 2/16") != std::string::npos);
         assert(stats.find("1,234 / 19,343") != std::string::npos);
@@ -436,7 +436,7 @@ int main()
     {
         // Stats rendering: an empty or mostly-unavailable daemon must not throw.
         const auto stats = render_stats(
-            nlohmann::json::object(), nullptr, "http://127.0.0.1:45869", "fallback");
+            nlohmann::json::object(), nullptr, "http://127.0.0.1:45869");
         assert(stats.find("building initial store") != std::string::npos);
     }
 

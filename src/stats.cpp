@@ -278,16 +278,10 @@ std::vector<std::string> local_api_keys(const Config& config)
 } // namespace
 
 std::string render_stats(const nlohmann::json& health, const nlohmann::json* api_version,
-    const std::string& api_url, const std::string& fallback_service_name)
+    const std::string& api_url)
 {
     std::ostringstream out;
     const std::int64_t now = static_cast<std::int64_t>(std::time(nullptr));
-
-    std::string service_name = string_field(health, "service_name");
-    if (service_name.empty())
-    {
-        service_name = fallback_service_name;
-    }
 
     std::string version = string_field(health, "hyd_version");
     if (version.empty() && api_version != nullptr)
@@ -305,7 +299,6 @@ std::string render_stats(const nlohmann::json& health, const nlohmann::json* api
 
     out << "hydd statistics for " << api_url << "\n\n";
 
-    add_row(out, "Service", service_name);
     if (!version.empty())
     {
         add_row(out, "Version", version);
@@ -381,16 +374,6 @@ std::string render_stats(const nlohmann::json& health, const nlohmann::json* api
         {
             add_row(out, "Build mapped", commas(*mappings) + " rows in this partition");
         }
-    }
-
-    std::string backend = string_field(health, "backend");
-    if (!backend.empty())
-    {
-        if (const auto partitions = get_u64(health, "partitions"); partitions && *partitions > 0)
-        {
-            backend += ", " + std::to_string(*partitions) + " partitions";
-        }
-        add_row(out, "Backend", backend);
     }
 
     if (const auto next_index = get_u64(health, "next_index"))
@@ -762,8 +745,7 @@ int run_stats(const Config& config)
 
                 try
                 {
-                    std::cout << render_stats(health, version_pointer, api_url,
-                        config.get_string("service_name", "public tag repository"));
+                    std::cout << render_stats(health, version_pointer, api_url);
                 }
                 catch (const std::exception& exception)
                 {

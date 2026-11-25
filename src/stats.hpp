@@ -15,7 +15,7 @@ namespace hyd {
 // statistics page. Unknown or missing fields are skipped so this works against
 // older daemons.
 std::string render_stats(const nlohmann::json& health, const nlohmann::json* api_version,
-    const std::string& api_url, const std::string& fallback_service_name);
+    const std::string& api_url);
 
 // Queries the local API and prints repository statistics. Returns a process
 // exit code.
